@@ -38,12 +38,25 @@ const router = createRouter({
   routes
 })
 
-router.beforeEach((to, from, next) => {
-  if (to.meta.requiresAdmin && !localStorage.getItem('adminToken')) {
-    next('/admin')
-  } else {
-    next()
+function isValidToken(token) {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]))
+    return payload.exp * 1000 > Date.now()
+  } catch {
+    return false
   }
+}
+
+router.beforeEach((to, from, next) => {
+  if (to.meta.requiresAdmin) {
+    const token = localStorage.getItem('adminToken')
+    if (!token || !isValidToken(token)) {
+      localStorage.removeItem('adminToken')
+      next('/admin')
+      return
+    }
+  }
+  next()
 })
 
 export default router

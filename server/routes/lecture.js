@@ -7,7 +7,10 @@ const fs = require('fs');
 const db = require('../db');
 
 // ZIP 上传配置
-const upload = multer({ dest: path.join(__dirname, '../uploads/') });
+const upload = multer({
+  dest: path.join(__dirname, '../uploads/'),
+  limits: { fileSize: 200 * 1024 * 1024 } // 200MB
+});
 
 // 讲义列表
 router.get('/', (req, res) => {
@@ -32,7 +35,17 @@ router.get('/', (req, res) => {
 });
 
 // 上传 ZIP 讲义
-router.post('/', upload.single('file'), (req, res) => {
+router.post('/', (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: '文件大小超过 200MB 限制' });
+      }
+      return res.status(400).json({ error: '文件上传失败: ' + err.message });
+    }
+    next();
+  });
+}, (req, res) => {
   const { title, slug, categoryId } = req.body;
   const file = req.file;
   

@@ -144,9 +144,12 @@ const newCategoryName = ref('')
 async function createCategory() {
   if (!newCategoryName.value.trim()) return
   try {
-    const res = await axios.post('/api/categories', { name: newCategoryName.value.trim() })
+    const token = localStorage.getItem('adminToken')
+    const res = await axios.post('/api/categories', { name: newCategoryName.value.trim() }, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    })
     categories.value.push(res.data)
-    categoryId.value = res.data.id
+    categoryId.value = Number(res.data.id)
     newCategoryName.value = ''
     showNewCategory.value = false
   } catch (e) {
@@ -182,12 +185,19 @@ async function upload() {
   formData.append('categoryId', categoryId.value)
 
   try {
-    await axios.post('/api/lectures', formData)
+    const token = localStorage.getItem('adminToken')
+    await axios.post('/api/lectures', formData, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    })
     success.value = '上传成功！即将跳转...'
     setTimeout(() => router.push('/admin/dashboard'), 1500)
   } catch (e) {
+    const status = e.response?.status
     const msg = e.response?.data?.error
-    if (msg?.includes('exists')) {
+    if (status === 401) {
+      error.value = '请先登录管理员账号'
+      setTimeout(() => router.push('/admin'), 1500)
+    } else if (msg?.includes('exists')) {
       error.value = '该 URL 标识已存在，请换个名字'
     } else if (msg?.includes('zip')) {
       error.value = 'ZIP 文件结构不符合要求，请检查目录结构'
