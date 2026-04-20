@@ -3,16 +3,16 @@
     <div class="login-card">
       <div class="login-header">
         <div class="logo">📚</div>
-        <h1 class="title">学生登录</h1>
-        <p class="subtitle">登录后即可浏览全部讲义</p>
+        <h1 class="title">学生注册</h1>
+        <p class="subtitle">创建账号后即可浏览全部讲义</p>
       </div>
       
-      <form @submit.prevent="login" class="form">
+      <form @submit.prevent="register" class="form">
         <div class="form-group">
           <label class="form-label">用户名</label>
           <input 
             v-model="username" 
-            placeholder="请输入用户名" 
+            placeholder="创建用户名" 
             required 
             class="input"
           />
@@ -22,7 +22,18 @@
           <input 
             v-model="password" 
             type="password" 
-            placeholder="请输入密码" 
+            placeholder="设置密码（至少6位）" 
+            required 
+            minlength="6"
+            class="input"
+          />
+        </div>
+        <div class="form-group">
+          <label class="form-label">确认密码</label>
+          <input 
+            v-model="confirmPassword" 
+            type="password" 
+            placeholder="再次输入密码" 
             required 
             class="input"
           />
@@ -34,12 +45,12 @@
         </div>
         
         <button type="submit" class="btn btn-primary" :disabled="loading">
-          <span v-if="loading">正在登录...</span>
-          <span v-else>立即登录</span>
+          <span v-if="loading">正在注册...</span>
+          <span v-else>创建账号</span>
         </button>
       </form>
       
-      <p class="hint">还没有账号？<router-link to="/register" style="color: var(--color-primary)">立即注册</router-link></p>
+      <p class="hint">已有账号？<router-link to="/login" style="color: var(--color-primary)">立即登录</router-link></p>
     </div>
   </div>
 </template>
@@ -52,14 +63,24 @@ import axios from 'axios'
 const router = useRouter()
 const username = ref('')
 const password = ref('')
+const confirmPassword = ref('')
 const error = ref('')
 const loading = ref(false)
 
-async function login() {
+async function register() {
+  if (password.value.length < 6) {
+    error.value = '密码至少6位'
+    return
+  }
+  if (password.value !== confirmPassword.value) {
+    error.value = '两次密码输入不一致'
+    return
+  }
+  
   loading.value = true
   error.value = ''
   try {
-    const res = await axios.post('/api/auth/student/login', {
+    const res = await axios.post('/api/auth/student/register', {
       username: username.value,
       password: password.value
     })
@@ -68,12 +89,10 @@ async function login() {
     router.push('/')
   } catch (e) {
     const msg = e.response?.data?.error
-    if (msg?.includes('密码')) {
-      error.value = '密码不正确，请检查大小写和空格'
-    } else if (msg?.includes('用户')) {
-      error.value = '该用户名不存在，请先注册'
+    if (msg?.includes('exists')) {
+      error.value = '该用户名已被使用，请换个名字'
     } else {
-      error.value = msg || '登录失败，请稍后重试'
+      error.value = msg || '注册失败，请稍后重试'
     }
   } finally {
     loading.value = false
