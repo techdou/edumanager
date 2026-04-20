@@ -33,8 +33,8 @@
             <label class="form-label">分类</label>
             <div class="category-select-row">
               <select v-model="categoryId" required class="input category-select">
-                <option value="">选择分类</option>
-                <option v-for="cat in categories" :key="cat.id" :value="cat.id">
+                <option :value="null">选择分类</option>
+                <option v-for="cat in categories" :key="cat.id" :value="Number(cat.id)">
                   {{ cat.name }}
                 </option>
               </select>
@@ -116,7 +116,7 @@ import axios from 'axios'
 const router = useRouter()
 const title = ref('')
 const slug = ref('')
-const categoryId = ref('')
+const categoryId = ref(null)
 const file = ref(null)
 const categories = ref([])
 const uploading = ref(false)
