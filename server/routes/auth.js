@@ -4,7 +4,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const db = require('../db');
 
-const JWT_SECRET = 'edumanager-secret-key-2024';
+const JWT_SECRET = process.env.JWT_SECRET || require('crypto').randomBytes(32).toString('hex');
 
 // 管理员登录
 router.post('/admin/login', async (req, res) => {
@@ -64,6 +64,26 @@ router.post('/student/login', (req, res) => {
   
   const token = jwt.sign({ id: student.id, username: student.username, role: 'student' }, JWT_SECRET, { expiresIn: '7d' });
   res.json({ token, username: student.username, role: 'student' });
+});
+
+// 管理员注册（仅第一个）
+router.post('/admin/register', (req, res) => {
+  const { username, password } = req.body;
+  
+  if (!username || !password) {
+    return res.status(400).json({ error: '用户名和密码必填' });
+  }
+  
+  const count = db.query('SELECT id FROM admins');
+  if (count.length > 0) {
+    return res.status(403).json({ error: '管理员账号已存在，无法重复注册' });
+  }
+  
+  const passwordHash = bcrypt.hashSync(password, 10);
+  const result = db.run('INSERT INTO admins (username, password_hash) VALUES (?, ?)', [username, passwordHash]);
+  
+  const token = jwt.sign({ id: result.lastInsertRowid, username, role: 'admin' }, JWT_SECRET, { expiresIn: '7d' });
+  res.json({ token, username, role: 'admin' });
 });
 
 module.exports = router;

@@ -7,7 +7,13 @@
           <span class="brand-name">EduManager</span>
         </div>
         <nav class="nav">
-          <router-link to="/login" class="nav-link">学生登录</router-link>
+          <template v-if="isLoggedIn">
+            <span class="nav-link nav-link--user">👋 {{ studentUsername }}</span>
+            <button class="nav-link" @click="logout">退出</button>
+          </template>
+          <template v-else>
+            <router-link to="/login" class="nav-link">学生登录</router-link>
+          </template>
           <router-link to="/admin" class="nav-link nav-link--primary">管理后台</router-link>
         </nav>
       </div>
@@ -87,6 +93,15 @@ const categories = ref([])
 const lectures = ref([])
 const loading = ref(true)
 const selectedCategory = ref('all')
+const isLoggedIn = ref(!!localStorage.getItem('token'))
+const studentUsername = ref(localStorage.getItem('studentUsername') || '')
+
+function logout() {
+  localStorage.removeItem('token')
+  localStorage.removeItem('studentUsername')
+  isLoggedIn.value = false
+  studentUsername.value = ''
+}
 
 const filteredLectures = computed(() => {
   if (selectedCategory.value === 'all') return lectures.value

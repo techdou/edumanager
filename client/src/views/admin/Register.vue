@@ -3,22 +3,22 @@
     <div class="login-card">
       <div class="login-header">
         <div class="logo">🛡️</div>
-        <h1 class="title">管理员登录</h1>
-        <p class="subtitle">管理后台访问需要管理员权限</p>
+        <h1 class="title">创建管理员</h1>
+        <p class="subtitle">仅限首位管理员注册</p>
       </div>
       
-      <form @submit.prevent="login" class="form">
+      <form @submit.prevent="register" class="form">
         <div class="form-group">
           <label class="form-label">用户名</label>
-          <input v-model="username" placeholder="请输入管理员账号" required class="input" />
+          <input v-model="username" placeholder="设置管理员用户名" required class="input" />
         </div>
         <div class="form-group">
           <label class="form-label">密码</label>
-          <input v-model="password" type="password" placeholder="请输入密码" required class="input" />
+          <input v-model="password" type="password" placeholder="设置密码" required class="input" />
         </div>
         <button type="submit" class="btn btn-primary" :disabled="loading">
-          <span v-if="loading">正在验证...</span>
-          <span v-else>进入管理后台</span>
+          <span v-if="loading">正在创建...</span>
+          <span v-else>创建管理员账号</span>
         </button>
       </form>
       
@@ -27,7 +27,7 @@
         <span>{{ error }}</span>
       </div>
       
-      <p class="hint">如未创建管理员账号，请先 <router-link to="/admin/register" style="color: var(--color-primary)">注册</router-link></p>
+      <p class="hint"><router-link to="/admin" style="color: var(--color-primary)">返回登录</router-link></p>
     </div>
   </div>
 </template>
@@ -43,25 +43,18 @@ const password = ref('')
 const error = ref('')
 const loading = ref(false)
 
-async function login() {
+async function register() {
   loading.value = true
   error.value = ''
   try {
-    const res = await axios.post('/api/auth/admin/login', {
+    const res = await axios.post('/api/auth/admin/register', {
       username: username.value,
       password: password.value
     })
     localStorage.setItem('adminToken', res.data.token)
     router.push('/admin/dashboard')
   } catch (e) {
-    const msg = e.response?.data?.error
-    if (msg?.includes('密码')) {
-      error.value = '密码错误，请重新输入'
-    } else if (msg?.includes('用户')) {
-      error.value = '管理员账号不存在'
-    } else {
-      error.value = msg || '登录失败，请检查网络连接'
-    }
+    error.value = e.response?.data?.error || '注册失败'
   } finally {
     loading.value = false
   }

@@ -97,6 +97,7 @@ async function login() {
       password: password.value
     })
     localStorage.setItem('token', res.data.token)
+    localStorage.setItem('studentUsername', res.data.username)
     router.push('/')
   } catch (e) {
     const msg = e.response?.data?.error
@@ -121,6 +122,7 @@ async function register() {
       password: regPassword.value
     })
     localStorage.setItem('token', res.data.token)
+    localStorage.setItem('studentUsername', res.data.username)
     router.push('/')
   } catch (e) {
     const msg = e.response?.data?.error

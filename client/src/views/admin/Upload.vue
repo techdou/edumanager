@@ -43,6 +43,9 @@
               </button>
             </div>
             <div v-if="showNewCategory" class="inline-form">
+              <p v-if="categories.length === 0" class="form-hint" style="margin-bottom: var(--space-2); color: var(--color-primary)">
+                还没有分类，请先创建一个
+              </p>
               <input v-model="newCategoryName" placeholder="输入分类名称" class="input" @keyup.enter="createCategory" />
               <button type="button" class="btn btn-primary btn-sm" @click="createCategory">添加</button>
               <button type="button" class="btn btn-ghost btn-sm" @click="showNewCategory = false; newCategoryName = ''">取消</button>
@@ -126,6 +129,9 @@ const success = ref('')
 onMounted(async () => {
   const res = await axios.get('/api/categories')
   categories.value = res.data
+  if (categories.value.length === 0) {
+    showNewCategory.value = true
+  }
 })
 
 function handleFile(e) {

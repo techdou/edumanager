@@ -67,10 +67,6 @@ async function initDb() {
       )
     `);
     
-    // 初始化管理员账号
-    const passwordHash = bcrypt.hashSync('admin123', 10);
-    db.run('INSERT INTO admins (username, password_hash) VALUES (?, ?)', ['admin', passwordHash]);
-    console.log('✅ Default admin created: admin / admin123');
   }
   
   // 保存数据库
