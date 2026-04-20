@@ -31,12 +31,22 @@
 
           <div class="form-group">
             <label class="form-label">分类</label>
-            <select v-model="categoryId" required class="input">
-              <option value="">选择分类</option>
-              <option v-for="cat in categories" :key="cat.id" :value="cat.id">
-                {{ cat.name }}
-              </option>
-            </select>
+            <div class="category-select-row">
+              <select v-model="categoryId" required class="input category-select">
+                <option value="">选择分类</option>
+                <option v-for="cat in categories" :key="cat.id" :value="cat.id">
+                  {{ cat.name }}
+                </option>
+              </select>
+              <button type="button" class="btn btn-ghost btn-sm" @click="showNewCategory = true" title="新建分类">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+              </button>
+            </div>
+            <div v-if="showNewCategory" class="inline-form">
+              <input v-model="newCategoryName" placeholder="输入分类名称" class="input" @keyup.enter="createCategory" />
+              <button type="button" class="btn btn-primary btn-sm" @click="createCategory">添加</button>
+              <button type="button" class="btn btn-ghost btn-sm" @click="showNewCategory = false; newCategoryName = ''">取消</button>
+            </div>
           </div>
 
           <div class="form-group">
@@ -120,6 +130,22 @@ onMounted(async () => {
 
 function handleFile(e) {
   file.value = e.target.files[0]
+}
+
+const showNewCategory = ref(false)
+const newCategoryName = ref('')
+
+async function createCategory() {
+  if (!newCategoryName.value.trim()) return
+  try {
+    const res = await axios.post('/api/categories', { name: newCategoryName.value.trim() })
+    categories.value.push(res.data)
+    categoryId.value = res.data.id
+    newCategoryName.value = ''
+    showNewCategory.value = false
+  } catch (e) {
+    error.value = e.response?.data?.error || '创建分类失败'
+  }
 }
 
 async function upload() {
@@ -258,6 +284,29 @@ async function upload() {
 .form-hint code {
   font-family: var(--font-mono);
   color: var(--color-primary);
+}
+
+.category-select-row {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.category-select {
+  flex: 1;
+}
+
+.inline-form {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  background: var(--color-bg);
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--color-border);
+}
+
+.inline-form .input {
+  flex: 1;
 }
 
 .file-upload {

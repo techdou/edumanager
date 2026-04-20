@@ -34,6 +34,24 @@
         </div>
       </div>
 
+      <!-- Categories -->
+      <div class="categories-section">
+        <div class="section-header">
+          <h2 class="section-title">分类管理</h2>
+          <div class="inline-add">
+            <input v-model="newCategoryName" placeholder="新分类名称" class="input input-sm" @keyup.enter="addCategory" />
+            <button class="btn btn-primary btn-sm" @click="addCategory">添加分类</button>
+          </div>
+        </div>
+        <div v-if="categories.length === 0" class="empty-state-sm">暂无分类，请在上方添加</div>
+        <div v-else class="category-list">
+          <div v-for="cat in categories" :key="cat.id" class="category-item">
+            <span class="category-name">{{ cat.name }}</span>
+            <button @click="deleteCategory(cat.id)" class="btn btn-ghost btn-sm text-danger">删除</button>
+          </div>
+        </div>
+      </div>
+
       <!-- Lecture List -->
       <div class="lectures-section">
         <h2 class="section-title">讲义列表</h2>
@@ -115,6 +133,28 @@ onMounted(async () => {
   categories.value = catRes.data
   loading.value = false
 })
+
+const newCategoryName = ref('')
+
+async function addCategory() {
+  if (!newCategoryName.value.trim()) return
+  try {
+    const res = await axios.post('/api/categories', { name: newCategoryName.value.trim() })
+    categories.value.push(res.data)
+    newCategoryName.value = ''
+  } catch (e) {
+    alert('创建失败：' + (e.response?.data?.error || '未知错误'))
+  }
+}
+
+async function deleteCategory(id) {
+  try {
+    await axios.delete(`/api/categories/${id}`)
+    categories.value = categories.value.filter(c => c.id !== id)
+  } catch (e) {
+    alert(e.response?.data?.error || '删除失败')
+  }
+}
 
 async function deleteLecture(id) {
   if (!confirm('删除后无法恢复，确定继续？')) return
@@ -319,6 +359,62 @@ async function deleteLecture(id) {
 .btn-sm {
   padding: var(--space-2) var(--space-3);
   font-size: var(--text-xs);
+}
+
+.categories-section {
+  margin-bottom: var(--space-8);
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.inline-add {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.input-sm {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  width: 200px;
+}
+
+.text-danger {
+  color: var(--color-danger, oklch(0.6 0.2 25));
+}
+
+.empty-state-sm {
+  padding: var(--space-4);
+  text-align: center;
+  color: var(--color-ink-tertiary);
+  font-size: var(--text-sm);
+}
+
+.category-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.category-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.category-name {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink-secondary);
 }
 
 @media (max-width: 768px) {
