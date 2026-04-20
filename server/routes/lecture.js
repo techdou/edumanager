@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const AdmZip = require('adm-zip');
+const { execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const db = require('../db');
@@ -45,17 +45,22 @@ router.post('/', upload.single('file'), (req, res) => {
   }
   
   try {
-    // 解压 ZIP
-    const zip = new AdmZip(file.path);
     const zipName = path.parse(file.originalname).name;
     const extractPath = path.join(__dirname, '../../lectures', slug);
     
-    // 确保目录存在
-    if (!fs.existsSync(extractPath)) {
-      fs.mkdirSync(extractPath, { recursive: true });
+    // 清理旧目录
+    if (fs.existsSync(extractPath)) {
+      fs.rmSync(extractPath, { recursive: true });
     }
+    fs.mkdirSync(extractPath, { recursive: true });
     
-    zip.extractAllTo(extractPath, true);
+    // 使用 unar 解压（正确处理 Windows 中文文件名 GBK 编码）
+    try {
+      execSync(`unar -o "${extractPath}" "${file.path}"`, { encoding: 'utf-8' });
+    } catch (e) {
+      // fallback 到 unzip
+      execSync(`unzip -o "${file.path}" -d "${extractPath}"`, { encoding: 'utf-8' });
+    }
     
     // 创建讲义记录
     const result = db.run(`
@@ -65,39 +70,24 @@ router.post('/', upload.single('file'), (req, res) => {
     const lectureId = result.lastInsertRowid;
     
     // 分析目录结构，创建章节
-    const entries = zip.getEntries();
-    const directories = entries
-      .filter(e => e.isDirectory && !e.entryName.startsWith('.'))
-      .map(e => e.entryName.replace(/\/$/, '').split('/')[0])
-      .filter((d, i, arr) => d && arr.indexOf(d) === i);
+    const topLevelDirs = fs.readdirSync(extractPath, { withFileTypes: true })
+      .filter(d => d.isDirectory() && !d.name.startsWith('.'));
     
-    if (directories.length === 0) {
-      // 单层 ZIP：没有子目录，直接把解压内容当作唯一章节
-      const htmlFiles = entries
-        .filter(e => !e.isDirectory && e.entryName.endsWith('.html'));
-      
+    if (topLevelDirs.length === 0) {
+      // 单层 ZIP：没有子目录
+      const htmlFiles = fs.readdirSync(extractPath).filter(f => f.endsWith('.html'));
       if (htmlFiles.length > 0) {
-        const chapterDir = slug;
-        const chapterPath = path.join(extractPath, chapterDir);
-        fs.mkdirSync(chapterPath, { recursive: true });
-        
-        // 移动所有文件到章节目录
-        entries.forEach(entry => {
-          if (!entry.isDirectory && !entry.entryName.startsWith('.') && !entry.entryName.includes('/')) {
-            const targetPath = path.join(chapterPath, path.basename(entry.entryName));
-            const isIndex = path.basename(entry.entryName).endsWith('.html');
-            const finalName = isIndex ? 'index.html' : path.basename(entry.entryName);
-            fs.writeFileSync(path.join(chapterPath, finalName), entry.getData());
-          }
-        });
-        
+        // 重命名第一个 HTML 文件为 index.html
+        if (!fs.existsSync(path.join(extractPath, 'index.html'))) {
+          fs.renameSync(path.join(extractPath, htmlFiles[0]), path.join(extractPath, 'index.html'));
+        }
         db.run(`
           INSERT INTO chapters (lecture_id, title, slug, path, order_index) VALUES (?, ?, ?, ?, ?)
         `, [lectureId, title, slug, `${slug}/${slug}`, 0]);
       }
     } else {
-      directories.forEach((dir, index) => {
-        const dirPath = path.join(extractPath, dir);
+      topLevelDirs.forEach((dir, index) => {
+        const dirPath = path.join(extractPath, dir.name);
         let indexPath = path.join(dirPath, 'index.html');
         
         // 如果没有 index.html，找目录里任意 .html 文件并重命名
@@ -111,7 +101,7 @@ router.post('/', upload.single('file'), (req, res) => {
         if (fs.existsSync(indexPath)) {
           db.run(`
             INSERT INTO chapters (lecture_id, title, slug, path, order_index) VALUES (?, ?, ?, ?, ?)
-        `, [lectureId, dir, dir, `${slug}/${dir}`, index]);
+          `, [lectureId, dir.name, dir.name, `${slug}/${dir.name}`, index]);
         }
       });
     }
