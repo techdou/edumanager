@@ -96,7 +96,7 @@ router.post('/', (req, res, next) => {
         }
         db.run(`
           INSERT INTO chapters (lecture_id, title, slug, path, order_index) VALUES (?, ?, ?, ?, ?)
-        `, [lectureId, title, slug, `${slug}/${slug}`, 0]);
+        `, [lectureId, title, slug, slug, 0]);
       }
     } else {
       topLevelDirs.forEach((dir, index) => {

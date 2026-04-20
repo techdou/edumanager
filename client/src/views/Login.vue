@@ -63,9 +63,15 @@ async function login() {
       username: username.value,
       password: password.value
     })
-    localStorage.setItem('token', res.data.token)
-    localStorage.setItem('studentUsername', res.data.username)
-    router.push('/')
+    const { token, username: uname, role } = res.data
+    if (role === 'admin') {
+      localStorage.setItem('adminToken', token)
+      router.push('/admin/dashboard')
+    } else {
+      localStorage.setItem('token', token)
+      localStorage.setItem('studentUsername', uname)
+      router.push('/')
+    }
   } catch (e) {
     const msg = e.response?.data?.error
     if (msg?.includes('密码')) {

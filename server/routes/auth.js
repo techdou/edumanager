@@ -26,7 +26,7 @@ router.post('/admin/login', async (req, res) => {
   res.json({ token, username: admin.username, role: 'admin' });
 });
 
-// 学生注册
+// 学生注册（如果无管理员，自动成为管理员）
 router.post('/student/register', (req, res) => {
   const { username, password } = req.body;
   
@@ -40,10 +40,19 @@ router.post('/student/register', (req, res) => {
   }
   
   const passwordHash = bcrypt.hashSync(password, 10);
-  db.run('INSERT INTO students (username, password_hash) VALUES (?, ?)', [username, passwordHash]);
+  const result = db.run('INSERT INTO students (username, password_hash) VALUES (?, ?)', [username, passwordHash]);
+  const studentId = result.lastInsertRowid;
   
-  const token = jwt.sign({ username, role: 'student' }, JWT_SECRET, { expiresIn: '7d' });
+  // 检查是否已有管理员
+  const adminCount = db.query('SELECT id FROM admins');
+  if (adminCount.length === 0) {
+    // 第一个用户，自动成为管理员
+    db.run('INSERT INTO admins (username, password_hash) VALUES (?, ?)', [username, passwordHash]);
+    const token = jwt.sign({ id: studentId, username, role: 'admin' }, JWT_SECRET, { expiresIn: '7d' });
+    return res.json({ token, username, role: 'admin' });
+  }
   
+  const token = jwt.sign({ id: studentId, username, role: 'student' }, JWT_SECRET, { expiresIn: '7d' });
   res.json({ token, username, role: 'student' });
 });
 
@@ -62,8 +71,12 @@ router.post('/student/login', (req, res) => {
     return res.status(401).json({ error: '用户名或密码错误' });
   }
   
-  const token = jwt.sign({ id: student.id, username: student.username, role: 'student' }, JWT_SECRET, { expiresIn: '7d' });
-  res.json({ token, username: student.username, role: 'student' });
+  // 检查是否也是管理员
+  const admin = db.get('SELECT * FROM admins WHERE username = ?', [username]);
+  const role = admin ? 'admin' : 'student';
+  
+  const token = jwt.sign({ id: student.id, username: student.username, role }, JWT_SECRET, { expiresIn: '7d' });
+  res.json({ token, username: student.username, role });
 });
 
 // 管理员注册（仅第一个）

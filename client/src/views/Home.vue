@@ -86,7 +86,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 
 const categories = ref([])
@@ -96,11 +96,15 @@ const selectedCategory = ref('all')
 const isLoggedIn = ref(!!localStorage.getItem('token'))
 const studentUsername = ref(localStorage.getItem('studentUsername') || '')
 
+function updateLoginState() {
+  isLoggedIn.value = !!localStorage.getItem('token')
+  studentUsername.value = localStorage.getItem('studentUsername') || ''
+}
+
 function logout() {
   localStorage.removeItem('token')
   localStorage.removeItem('studentUsername')
-  isLoggedIn.value = false
-  studentUsername.value = ''
+  updateLoginState()
 }
 
 const filteredLectures = computed(() => {
@@ -116,6 +120,12 @@ onMounted(async () => {
   categories.value = catRes.data
   lectures.value = lecRes.data
   loading.value = false
+  updateLoginState()
+  window.addEventListener('storage', updateLoginState)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('storage', updateLoginState)
 })
 </script>
 
