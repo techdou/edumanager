@@ -1,27 +1,155 @@
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Color System - Warm Academic */
+  --bg-primary: #faf8f5;
+  --bg-secondary: #f0ebe4;
+  --bg-card: #ffffff;
+  --bg-accent: #fff8f0;
+  
+  --text-primary: #1a1a1a;
+  --text-secondary: #5c5c5c;
+  --text-muted: #8a8a8a;
+  
+  --brand-primary: #c45c26;
+  --brand-secondary: #e8a87c;
+  --brand-light: #ffd9b3;
+  
+  --border-light: rgba(0,0,0,0.06);
+  --border-medium: rgba(0,0,0,0.12);
+  
+  --shadow-sm: 0 2px 8px rgba(0,0,0,0.04);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,0.12);
+  
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  
+  --font-display: 'Satoshi', sans-serif;
+  --font-body: 'Satoshi', sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  html {
+    font-family: var(--font-body);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+  }
+  
+  body {
+    min-height: 100vh;
+    background: var(--bg-primary);
+    background-image: 
+      radial-gradient(circle at 20% 80%, var(--brand-light) 0%, transparent 50%),
+      radial-gradient(circle at 80% 20%, var(--bg-accent) 0%, transparent 40%);
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    letter-spacing: -0.02em;
   }
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+@layer components {
+  .btn-primary {
+    @apply px-6 py-3 rounded-lg font-medium transition-all duration-200;
+    background: var(--brand-primary);
+    color: white;
+    border: none;
+    cursor: pointer;
+  }
+  
+  .btn-primary:hover {
+    background: #b35020;
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+  }
+  
+  .btn-secondary {
+    @apply px-6 py-3 rounded-lg font-medium transition-all duration-200;
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border: 1px solid var(--border-medium);
+    cursor: pointer;
+  }
+  
+  .btn-secondary:hover {
+    background: var(--bg-secondary);
+  }
+  
+  .card {
+    @apply rounded-xl p-6 transition-all duration-300;
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    box-shadow: var(--shadow-sm);
+  }
+  
+  .card:hover {
+    box-shadow: var(--shadow-md);
+    border-color: var(--border-medium);
+  }
+  
+  .nav-link {
+    @apply px-3 py-2 rounded-lg text-sm transition-all duration-200;
+    color: var(--text-secondary);
+  }
+  
+  .nav-link:hover {
+    color: var(--brand-primary);
+    background: var(--bg-accent);
+  }
+  
+  .nav-link.active {
+    color: var(--brand-primary);
+    background: var(--brand-light);
+  }
 }
 
 @layer utilities {
-  .text-balance {
-    text-wrap: balance;
+  .animate-fade-in {
+    animation: fadeIn 0.5s ease-out forwards;
+  }
+  
+  .animate-fade-in-up {
+    animation: fadeInUp 0.6s ease-out forwards;
+  }
+  
+  .text-brand { color: var(--brand-primary); }
+  .bg-brand { background: var(--brand-primary); }
+  .border-brand { border-color: var(--brand-primary); }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.stagger-1 { animation-delay: 0.1s; }
+.stagger-2 { animation-delay: 0.2s; }
+.stagger-3 { animation-delay: 0.3s; }
+.stagger-4 { animation-delay: 0.4s; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
