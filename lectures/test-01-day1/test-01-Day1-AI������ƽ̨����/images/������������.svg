@@ -1,0 +1,39 @@
+<svg viewBox="0 0 500 420" xmlns="http://www.w3.org/2000/svg">
+  <rect width="500" height="420" rx="12" fill="#1a1a2e"/>
+  <text x="250" y="30" fill="#fff" font-size="18" text-anchor="middle" font-weight="bold">豆包全能力矩阵</text>
+  <!-- Grid -->
+  <rect x="30" y="50" width="210" height="55" rx="8" fill="#2a2a4a"/>
+  <rect x="260" y="50" width="210" height="55" rx="8" fill="#2a2a4a"/>
+  <rect x="30" y="115" width="210" height="55" rx="8" fill="#2a2a4a"/>
+  <rect x="260" y="115" width="210" height="55" rx="8" fill="#2a2a4a"/>
+  <rect x="30" y="180" width="210" height="55" rx="8" fill="#2a2a4a"/>
+  <rect x="260" y="180" width="210" height="55" rx="8" fill="#2a2a4a"/>
+  <rect x="30" y="245" width="210" height="55" rx="8" fill="#2a2a4a"/>
+  <rect x="260" y="245" width="210" height="55" rx="8" fill="#2a2a4a"/>
+  <!-- Row 1 -->
+  <text x="135" y="73" fill="#4A90D9" font-size="16" text-anchor="middle">💬 智能对话</text>
+  <text x="135" y="93" fill="#aaa" font-size="11" text-anchor="middle">问答 / 翻译 / 写作</text>
+  <text x="365" y="73" fill="#7B68EE" font-size="16" text-anchor="middle">🎨 生成图片</text>
+  <text x="365" y="93" fill="#aaa" font-size="11" text-anchor="middle">写实 / 插画 / 水彩</text>
+  <!-- Row 2 -->
+  <text x="135" y="138" fill="#50C878" font-size="16" text-anchor="middle">🎬 生成视频</text>
+  <text x="135" y="158" fill="#aaa" font-size="11" text-anchor="middle">营销素材 / 教学内容</text>
+  <text x="365" y="138" fill="#FF6B6B" font-size="16" text-anchor="middle">🎵 生成音乐</text>
+  <text x="365" y="158" fill="#aaa" font-size="11" text-anchor="middle">配乐 / 片头 / BGM</text>
+  <!-- Row 3 -->
+  <text x="135" y="203" fill="#FFD93D" font-size="16" text-anchor="middle">🎙️ 生成播客</text>
+  <text x="135" y="223" fill="#aaa" font-size="11" text-anchor="middle">文档转对话式音频</text>
+  <text x="365" y="203" fill="#FF8C00" font-size="16" text-anchor="middle">🌐 HTML 网页</text>
+  <text x="365" y="223" fill="#aaa" font-size="11" text-anchor="middle">落地页 / 数据展示</text>
+  <!-- Row 4 -->
+  <text x="135" y="268" fill="#E040FB" font-size="16" text-anchor="middle">📱 轻应用</text>
+  <text x="135" y="288" fill="#aaa" font-size="11" text-anchor="middle">Prompt 即应用</text>
+  <text x="365" y="268" fill="#00BCD4" font-size="16" text-anchor="middle">🔍 联网搜索</text>
+  <text x="365" y="288" fill="#aaa" font-size="11" text-anchor="middle">实时信息 / 新闻</text>
+  <!-- Bottom highlight -->
+  <rect x="30" y="320" width="440" height="45" rx="8" fill="#3a2a4a" stroke="#7B68EE" stroke-width="1"/>
+  <text x="250" y="340" fill="#fff" font-size="14" text-anchor="middle">🔧 扩展插件</text>
+  <text x="250" y="358" fill="#aaa" font-size="11" text-anchor="middle">导出Word · 公式渲染 · 历史记录 · 文档阅读 · 更多...</text>
+  <!-- Progress bar -->
+  <text x="250" y="400" fill="#888" font-size="12" text-anchor="middle">你以为豆包只是聊天工具？它其实是一个全能 AI 工作站</text>
+</svg>

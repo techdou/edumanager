@@ -71,16 +71,50 @@ router.post('/', upload.single('file'), (req, res) => {
       .map(e => e.entryName.replace(/\/$/, '').split('/')[0])
       .filter((d, i, arr) => d && arr.indexOf(d) === i);
     
-    directories.forEach((dir, index) => {
-      const dirPath = path.join(extractPath, dir);
-      const indexPath = path.join(dirPath, 'index.html');
+    if (directories.length === 0) {
+      // 单层 ZIP：没有子目录，直接把解压内容当作唯一章节
+      const htmlFiles = entries
+        .filter(e => !e.isDirectory && e.entryName.endsWith('.html'));
       
-      if (fs.existsSync(indexPath)) {
+      if (htmlFiles.length > 0) {
+        const chapterDir = slug;
+        const chapterPath = path.join(extractPath, chapterDir);
+        fs.mkdirSync(chapterPath, { recursive: true });
+        
+        // 移动所有文件到章节目录
+        entries.forEach(entry => {
+          if (!entry.isDirectory && !entry.entryName.startsWith('.') && !entry.entryName.includes('/')) {
+            const targetPath = path.join(chapterPath, path.basename(entry.entryName));
+            const isIndex = path.basename(entry.entryName).endsWith('.html');
+            const finalName = isIndex ? 'index.html' : path.basename(entry.entryName);
+            fs.writeFileSync(path.join(chapterPath, finalName), entry.getData());
+          }
+        });
+        
         db.run(`
           INSERT INTO chapters (lecture_id, title, slug, path, order_index) VALUES (?, ?, ?, ?, ?)
-        `, [lectureId, dir, dir, `${slug}/${dir}`, index]);
+        `, [lectureId, title, slug, `${slug}/${slug}`, 0]);
       }
-    });
+    } else {
+      directories.forEach((dir, index) => {
+        const dirPath = path.join(extractPath, dir);
+        let indexPath = path.join(dirPath, 'index.html');
+        
+        // 如果没有 index.html，找目录里任意 .html 文件并重命名
+        if (!fs.existsSync(indexPath)) {
+          const htmlFiles = fs.readdirSync(dirPath).filter(f => f.endsWith('.html'));
+          if (htmlFiles.length > 0) {
+            fs.renameSync(path.join(dirPath, htmlFiles[0]), indexPath);
+          }
+        }
+        
+        if (fs.existsSync(indexPath)) {
+          db.run(`
+            INSERT INTO chapters (lecture_id, title, slug, path, order_index) VALUES (?, ?, ?, ?, ?)
+        `, [lectureId, dir, dir, `${slug}/${dir}`, index]);
+        }
+      });
+    }
     
     // 删除临时文件
     fs.unlinkSync(file.path);
