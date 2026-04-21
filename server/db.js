@@ -11,14 +11,12 @@ async function initDb() {
   
   const dbPath = path.join(__dirname, '../data/edumanager.db');
   
-  // 尝试加载已有数据库
   if (fs.existsSync(dbPath)) {
     const buffer = fs.readFileSync(dbPath);
     db = new SQL.Database(buffer);
   } else {
     db = new SQL.Database();
     
-    // 创建表结构
     db.run(`
       CREATE TABLE admins (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,9 +67,7 @@ async function initDb() {
     
   }
   
-  // 保存数据库
   saveDb();
-  
   return db;
 }
 
@@ -93,13 +89,16 @@ function query(sql, params = []) {
     results.push(row);
   }
   stmt.free();
+  const op = sql.trim().toUpperCase().split(' ')[0];
+  if (['INSERT', 'UPDATE', 'DELETE', 'ALTER'].includes(op)) saveDb();
   return results;
 }
 
 function run(sql, params = []) {
   db.run(sql, params);
-  saveDb();
+  // Get last_insert_rowid BEFORE saveDb (saveDb resets it to 0 in sql.js)
   const lastId = query('SELECT last_insert_rowid() as id')[0].id;
+  saveDb();
   return { lastInsertRowid: lastId };
 }
 

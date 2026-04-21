@@ -59,17 +59,28 @@ async function login() {
   loading.value = true
   error.value = ''
   try {
-    const res = await axios.post('/api/auth/student/login', {
-      username: username.value,
-      password: password.value
-    })
-    const { token, username: uname, role } = res.data
+    // Try admin login first, fall back to student login
+    let res
+    try {
+      res = await axios.post('/api/auth/admin/login', {
+        username: username.value,
+        password: password.value
+      })
+    } catch (e) {
+      // If admin login fails, try student login
+      res = await axios.post('/api/auth/student/login', {
+        username: username.value,
+        password: password.value
+      })
+    }
+    
+    const { token, role } = res.data
     if (role === 'admin') {
       localStorage.setItem('adminToken', token)
       router.push('/admin/dashboard')
     } else {
       localStorage.setItem('token', token)
-      localStorage.setItem('studentUsername', uname)
+      localStorage.setItem('studentUsername', res.data.username || username.value)
       router.push('/')
     }
   } catch (e) {

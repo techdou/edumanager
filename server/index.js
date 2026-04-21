@@ -11,43 +11,33 @@ const adminAuth = require('./middleware/adminAuth');
 const app = express();
 const PORT = 3142;
 
-// 初始化数据库
+app.use((req, res, next) => {
+  console.log('[REQ]', req.method, req.url);
+  next();
+});
+
+app.use(cors());
+app.use(express.json());
+
+app.use('/api/auth', authRoutes);
+app.use('/api/lectures', lectureRoutes);
+app.post('/api/lectures', adminAuth, lectureRoutes);
+app.delete('/api/lectures/:id', adminAuth, lectureRoutes);
+app.use('/api/categories', categoryRoutes);
+app.post('/api/categories', adminAuth, categoryRoutes);
+app.delete('/api/categories/:id', adminAuth, categoryRoutes);
+
+app.use('/lectures', express.static(path.join(__dirname, '../lectures')));
+
+const distPath = path.join(__dirname, '../client/dist');
+app.use(express.static(distPath));
+app.get('*', (req, res) => {
+  console.log('[CATCHALL]', req.url);
+  res.sendFile(path.join(distPath, 'index.html'));
+});
+
 db.init().then(() => {
-  console.log('✅ Database initialized');
-
-  // 中间件
-  app.use(cors());
-  app.use(express.json());
-
-  // 静态文件 - 讲义目录
-  app.use('/lectures', express.static(path.join(__dirname, '../lectures')));
-
-  // API 路由
-  app.use('/api/auth', authRoutes);
-  // 讲义:GET 公开,写操作需 admin
-  app.get('/api/lectures', lectureRoutes);
-  app.post('/api/lectures', adminAuth, lectureRoutes);
-  app.delete('/api/lectures/:id', adminAuth, lectureRoutes);
-
-  // 分类:GET 公开,写操作需 admin
-  app.get('/api/categories', categoryRoutes);
-  app.post('/api/categories', adminAuth, categoryRoutes);
-  app.delete('/api/categories/:id', adminAuth, categoryRoutes);
-
-  // 前端静态文件（生产时由 Vite 构建）
-  app.use(express.static(path.join(__dirname, '../client/dist')));
-
-  // 所有其他路由返回前端入口
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../client/dist/index.html'));
-  });
-
-  app.listen(PORT, () => {
-    console.log(`✅ EduManager running at http://localhost:${PORT}`);
-    console.log(`📚 API: http://localhost:${PORT}/api`);
-    console.log(`🎓 Student: http://localhost:${PORT}`);
-    console.log(`🔧 Admin: http://localhost:${PORT}/admin`);
-  });
+  app.listen(PORT, () => console.log('[START] Server on', PORT));
 }).catch(err => {
-  console.error('❌ Database init failed:', err);
+  console.error('[START] DB error:', err);
 });
