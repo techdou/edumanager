@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const adminAuth = require('../middleware/adminAuth');
 
 // 分类列表
 router.get('/', (req, res) => {
@@ -8,8 +9,8 @@ router.get('/', (req, res) => {
   res.json(categories);
 });
 
-// 创建分类
-router.post('/', (req, res) => {
+// 创建分类（需管理员）
+router.post('/', adminAuth, (req, res) => {
   const { name } = req.body;
   
   if (!name) {
@@ -20,8 +21,8 @@ router.post('/', (req, res) => {
   res.json({ id: result.lastInsertRowid, name });
 });
 
-// 删除分类
-router.delete('/:id', (req, res) => {
+// 删除分类（需管理员）
+router.delete('/:id', adminAuth, (req, res) => {
   const { id } = req.params;
   
   // 检查是否有讲义使用此分类

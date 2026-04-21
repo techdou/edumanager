@@ -6,6 +6,9 @@ const path = require('path');
 const fs = require('fs');
 const db = require('../db');
 
+// 管理员权限中间件（用于需要管理员的操作）
+const adminAuth = require('../middleware/adminAuth');
+
 // ZIP 上传配置
 const upload = multer({
   dest: path.join(__dirname, '../uploads/'),
@@ -35,7 +38,7 @@ router.get('/', (req, res) => {
 });
 
 // 上传 ZIP 讲义
-router.post('/', (req, res, next) => {
+router.post('/', adminAuth, (req, res, next) => {
   upload.single('file')(req, res, (err) => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') {

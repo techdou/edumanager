@@ -21,11 +21,7 @@ app.use(express.json());
 
 app.use('/api/auth', authRoutes);
 app.use('/api/lectures', lectureRoutes);
-app.post('/api/lectures', adminAuth, lectureRoutes);
-app.delete('/api/lectures/:id', adminAuth, lectureRoutes);
 app.use('/api/categories', categoryRoutes);
-app.post('/api/categories', adminAuth, categoryRoutes);
-app.delete('/api/categories/:id', adminAuth, categoryRoutes);
 
 app.use('/lectures', express.static(path.join(__dirname, '../lectures')));
 
