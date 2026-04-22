@@ -3,7 +3,12 @@ import { createRouter, createWebHistory } from 'vue-router'
 const routes = [
   {
     path: '/',
-    component: () => import('../views/Home.vue')
+    component: () => import('../views/Profile.vue')
+  },
+  {
+    path: '/lectures',
+    component: () => import('../views/Home.vue'),
+    meta: { requiresStudent: true }
   },
   {
     path: '/login',
@@ -15,7 +20,8 @@ const routes = [
   },
   {
     path: '/lecture/:slug/:chapter?',
-    component: () => import('../views/Lecture.vue')
+    component: () => import('../views/Lecture.vue'),
+    meta: { requiresStudent: true }
   },
   {
     path: '/admin',
@@ -33,6 +39,11 @@ const routes = [
   {
     path: '/admin/upload',
     component: () => import('../views/admin/Upload.vue'),
+    meta: { requiresAdmin: true }
+  },
+  {
+    path: '/admin/profile',
+    component: () => import('../views/admin/ProfileUpload.vue'),
     meta: { requiresAdmin: true }
   }
 ]
@@ -52,11 +63,21 @@ function isValidToken(token) {
 }
 
 router.beforeEach((to, from, next) => {
+  // Admin guard
   if (to.meta.requiresAdmin) {
     const token = localStorage.getItem('adminToken')
     if (!token || !isValidToken(token)) {
       localStorage.removeItem('adminToken')
       next('/admin')
+      return
+    }
+  }
+  // Student guard
+  if (to.meta.requiresStudent) {
+    const token = localStorage.getItem('token')
+    if (!token || !isValidToken(token)) {
+      localStorage.removeItem('token')
+      next('/')
       return
     }
   }

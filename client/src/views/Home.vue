@@ -102,8 +102,11 @@ function updateLoginState() {
 }
 
 function logout() {
+  // 清除学生登录态
   localStorage.removeItem('token')
   localStorage.removeItem('studentUsername')
+  // 清除管理员登录态（如果有）
+  localStorage.removeItem('adminToken')
   updateLoginState()
 }
 

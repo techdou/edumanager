@@ -9,6 +9,7 @@
         <nav class="nav">
           <router-link to="/admin/dashboard" class="nav-link">讲义管理</router-link>
           <router-link to="/admin/upload" class="nav-link nav-link--primary">上传讲义</router-link>
+          <router-link to="/admin/profile" class="nav-link">编辑主页</router-link>
           <router-link to="/" class="nav-link">学生端</router-link>
         </nav>
       </div>
@@ -149,7 +150,10 @@ async function addCategory() {
 
 async function deleteCategory(id) {
   try {
-    await axios.delete(`/api/categories/${id}`)
+    const token = localStorage.getItem('adminToken')
+    await axios.delete(`/api/categories/${id}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    })
     categories.value = categories.value.filter(c => c.id !== id)
   } catch (e) {
     alert(e.response?.data?.error || '删除失败')
@@ -160,7 +164,10 @@ async function deleteLecture(id) {
   if (!confirm('删除后无法恢复，确定继续？')) return
   
   try {
-    await axios.delete(`/api/lectures/${id}`)
+    const token = localStorage.getItem('adminToken')
+    await axios.delete(`/api/lectures/${id}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    })
     lectures.value = lectures.value.filter(l => l.id !== id)
   } catch (e) {
     alert('删除失败：' + (e.response?.data?.error || '未知错误'))
