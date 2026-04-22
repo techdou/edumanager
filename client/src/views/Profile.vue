@@ -42,7 +42,7 @@
     </button>
 
     <!-- Login Modal -->
-    <LoginModal v-model:visible="showLoginModal" />
+    <LoginModal v-model:visible="showLoginModal" @success="onLoginSuccess" />
   </div>
 </template>
 
@@ -83,6 +83,11 @@ function handleFabClick() {
   } else {
     showLoginModal.value = true
   }
+}
+
+function onLoginSuccess() {
+  // Use full page navigation to ensure login state is fresh
+  window.location.href = '/lectures'
 }
 </script>
 

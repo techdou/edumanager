@@ -60,11 +60,9 @@
 
 <script setup>
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
 
 const props = defineProps({ visible: Boolean })
-const emit = defineEmits(['update:visible'])
-const router = useRouter()
+const emit = defineEmits(['update:visible', 'success'])
 
 const mode = ref('login')
 const username = ref('')
@@ -97,7 +95,7 @@ async function handleSubmit() {
     localStorage.setItem('studentUsername', data.username)
     if (data.role === 'admin') localStorage.setItem('adminToken', data.token)
     close()
-    router.push('/')
+    emit('success')
   } catch {
     error.value = '网络错误，请重试'
   } finally {
