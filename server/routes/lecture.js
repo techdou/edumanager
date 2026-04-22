@@ -8,6 +8,7 @@ const db = require('../db');
 
 // 管理员权限中间件（用于需要管理员的操作）
 const adminAuth = require('../middleware/adminAuth');
+const { extractTOC } = require('../utils/tocExtractor');
 
 // ZIP 上传配置
 const upload = multer({
@@ -160,6 +161,24 @@ router.delete('/:id', (req, res) => {
   }
   
   res.json({ success: true });
+});
+
+// Get TOC for a specific chapter
+router.get('/toc/:lectureSlug/:chapterSlug', (req, res) => {
+  const { lectureSlug, chapterSlug } = req.params;
+  const htmlPath = path.join(__dirname, '../../lectures', lectureSlug, chapterSlug, 'index.html');
+  
+  if (!fs.existsSync(htmlPath)) {
+    return res.status(404).json({ error: 'HTML file not found' });
+  }
+  
+  try {
+    const toc = extractTOC(htmlPath);
+    res.json(toc);
+  } catch (err) {
+    console.error('TOC extraction error:', err);
+    res.status(500).json({ error: 'TOC extraction failed' });
+  }
 });
 
 module.exports = router;

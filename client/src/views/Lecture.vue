@@ -13,10 +13,10 @@
     </header>
 
     <div class="lecture-body">
-      <!-- Sidebar -->
+      <!-- Sidebar: chapters or TOC -->
       <aside class="sidebar" :class="{ 'sidebar--collapsed': sidebarCollapsed }">
         <div class="sidebar-header">
-          <h3 class="sidebar-title">章节目录</h3>
+          <h3 class="sidebar-title">{{ toc ? '章节导航' : '章节目录' }}</h3>
           <button 
             class="sidebar-toggle"
             @click="sidebarCollapsed = !sidebarCollapsed"
@@ -29,7 +29,8 @@
           </button>
         </div>
         
-        <nav class="chapter-list">
+        <!-- Chapter list (multi-chapter lecture) -->
+        <nav v-if="chapters.length > 1 && !showToc" class="chapter-list">
           <router-link 
             v-for="chapter in chapters" 
             :key="chapter.id"
@@ -39,6 +40,39 @@
             <span class="chapter-num">{{ String(chapter.id).padStart(2, '0') }}</span>
             <span class="chapter-name">{{ chapter.title }}</span>
           </router-link>
+        </nav>
+
+        <!-- TOC list (single-chapter with headings) -->
+        <nav v-if="showToc && toc" class="toc-list">
+          <div v-for="mod in toc.modules" :key="mod.id" class="toc-module">
+            <a
+              :href="mod.anchor"
+              :class="['toc-module-title', { active: activeAnchor === mod.anchor }]"
+              @click.prevent="scrollToAnchor(mod.anchor)"
+            >
+              <span class="toc-module-text">{{ mod.title }}</span>
+              <span v-if="mod.time" class="toc-module-time">{{ mod.time }}</span>
+            </a>
+            <div v-if="mod.sections.length" class="toc-sections">
+              <a
+                v-for="sec in mod.sections"
+                :key="sec.id"
+                :href="sec.anchor"
+                :class="['toc-section-item', { active: activeAnchor === sec.anchor }]"
+                @click.prevent="scrollToAnchor(sec.anchor)"
+              >
+                {{ sec.title }}
+              </a>
+            </div>
+          </div>
+        </nav>
+
+        <!-- Single chapter, no TOC -->
+        <nav v-if="chapters.length === 1 && !showToc" class="chapter-list">
+          <div class="chapter-item active">
+            <span class="chapter-num">01</span>
+            <span class="chapter-name">{{ chapters[0].title }}</span>
+          </div>
         </nav>
       </aside>
 
@@ -52,9 +86,11 @@
         
         <iframe 
           v-else-if="currentPath"
+          ref="viewerFrame"
           :src="`/lectures/${currentPath}/index.html`"
           class="viewer-frame"
           sandbox="allow-scripts allow-same-origin"
+          @load="onIframeLoad"
         />
         
         <div v-else class="empty-state">
@@ -68,7 +104,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import axios from 'axios'
 
@@ -77,29 +113,122 @@ const slug = computed(() => route.params.slug)
 const currentChapter = computed(() => route.params.chapter)
 const sidebarCollapsed = ref(false)
 const loading = ref(true)
+const viewerFrame = ref(null)
 
 const lecture = ref(null)
 const chapters = ref([])
+const toc = ref(null)
+const activeAnchor = ref('')
+const showToc = computed(() => !!toc.value && toc.value.modules.length > 0)
+
 const currentPath = computed(() => {
   if (!lecture.value || !currentChapter.value) return null
   return `${slug.value}/${currentChapter.value}`
 })
 
-onMounted(async () => {
+async function loadLecture() {
   loading.value = true
+  toc.value = null
+  activeAnchor.value = ''
+  
   const res = await axios.get('/api/lectures')
   lecture.value = res.data.find(l => l.slug === slug.value)
   chapters.value = lecture.value?.chapters || []
+  
+  // Try to load TOC for current chapter
+  if (currentPath.value) {
+    try {
+      const [lSlug, cSlug] = currentPath.value.split('/')
+      const tocRes = await axios.get(`/api/lectures/toc/${lSlug}/${cSlug}`)
+      toc.value = tocRes.data
+    } catch {
+      toc.value = null
+    }
+  }
+  
   loading.value = false
+}
+
+function onIframeLoad() {
+  if (!showToc.value || !viewerFrame.value) return
+  
+  const iframe = viewerFrame.value
+  try {
+    const doc = iframe.contentDocument
+    if (!doc) return
+    
+    // Inject scroll tracker into iframe
+    const script = doc.createElement('script')
+    script.textContent = `
+      (function() {
+        let ticking = false;
+        const headings = document.querySelectorAll('h1[id], h2[id], h3[id], h4[id]');
+        
+        function sendActiveHeading() {
+          const scrollTop = window.scrollY || document.documentElement.scrollTop;
+          let active = '';
+          
+          for (let i = headings.length - 1; i >= 0; i--) {
+            const el = headings[i];
+            const rect = el.getBoundingClientRect();
+            if (rect.top <= 120) {
+              active = '#' + el.id;
+              break;
+            }
+          }
+          
+          window.parent.postMessage({ type: 'toc-active', anchor: active }, '*');
+        }
+        
+        window.addEventListener('scroll', function() {
+          if (!ticking) {
+            ticking = true;
+            requestAnimationFrame(function() {
+              sendActiveHeading();
+              ticking = false;
+            });
+          }
+        });
+        
+        // Initial call
+        sendActiveHeading();
+      })();
+    `
+    doc.head.appendChild(script)
+  } catch (e) {
+    // Cross-origin or sandbox restriction
+  }
+}
+
+function scrollToAnchor(anchor) {
+  if (!viewerFrame.value) return
+  try {
+    const doc = viewerFrame.value.contentDocument
+    if (!doc) return
+    const el = doc.querySelector(anchor)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      activeAnchor.value = anchor
+    }
+  } catch {
+    // fallback: set iframe src with hash
+    viewerFrame.value.src = `/lectures/${currentPath.value}/index.html${anchor}`
+  }
+}
+
+// Listen for scroll messages from iframe
+onMounted(() => {
+  window.addEventListener('message', (e) => {
+    if (e.data?.type === 'toc-active') {
+      activeAnchor.value = e.data.anchor
+    }
+  })
 })
 
-watch(slug, async () => {
-  loading.value = true
-  const res = await axios.get('/api/lectures')
-  lecture.value = res.data.find(l => l.slug === slug.value)
-  chapters.value = lecture.value?.chapters || []
-  loading.value = false
-})
+onMounted(() => loadLecture())
+
+watch(slug, () => loadLecture())
+watch(currentChapter, () => loadLecture())
 </script>
 
 <style scoped>
@@ -231,6 +360,7 @@ watch(slug, async () => {
   color: var(--color-ink-secondary);
 }
 
+/* Chapter list */
 .chapter-list {
   flex: 1;
   overflow-y: auto;
@@ -279,6 +409,89 @@ watch(slug, async () => {
 }
 
 .sidebar--collapsed .chapter-name {
+  display: none;
+}
+
+/* TOC list */
+.toc-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-3);
+}
+
+.toc-module {
+  margin-bottom: var(--space-2);
+}
+
+.toc-module-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-ink);
+  text-decoration: none;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+  cursor: pointer;
+}
+
+.toc-module-title:hover {
+  background: var(--color-surface);
+}
+
+.toc-module-title.active {
+  background: var(--color-primary-subtle);
+  color: var(--color-primary);
+}
+
+.toc-module-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toc-module-time {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-ink-tertiary);
+  flex-shrink: 0;
+}
+
+.toc-sections {
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--color-border);
+  margin-left: var(--space-4);
+  margin-top: var(--space-1);
+}
+
+.toc-section-item {
+  display: block;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: var(--color-ink-secondary);
+  text-decoration: none;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+  margin-bottom: 1px;
+  line-height: 1.5;
+}
+
+.toc-section-item:hover {
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+
+.toc-section-item.active {
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+.sidebar--collapsed .toc-module-text,
+.sidebar--collapsed .toc-module-time,
+.sidebar--collapsed .toc-sections {
   display: none;
 }
 
