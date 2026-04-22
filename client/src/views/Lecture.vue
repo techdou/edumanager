@@ -15,6 +15,17 @@
     <div class="lecture-body">
       <!-- Sidebar: chapters or TOC -->
       <aside class="sidebar" :class="{ 'sidebar--collapsed': sidebarCollapsed }">
+        <!-- Floating sidebar toggle (visible when sidebar is collapsed) -->
+        <button 
+          class="sidebar-float-toggle"
+          :class="{ 'sidebar-float-toggle--visible': sidebarCollapsed }"
+          @click="sidebarCollapsed = false"
+          title="展开目录"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M13 17l5-5-5-5M6 17l5-5-5-5"/>
+          </svg>
+        </button>
         <div class="sidebar-header">
           <h3 class="sidebar-title">{{ toc ? '章节导航' : '章节目录' }}</h3>
           <button 
@@ -316,8 +327,47 @@ watch(currentChapter, () => loadLecture())
   overflow: hidden;
 }
 
+.lecture-body {
+  position: relative;
+}
+
+/* Floating toggle (outside sidebar, appears when collapsed) */
+.sidebar-float-toggle {
+  display: none;
+  position: absolute;
+  top: 50%;
+  left: 100%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-ink-divider);
+  background: var(--color-surface);
+  color: var(--color-ink-tertiary);
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  box-shadow: var(--shadow-sm);
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+
+.sidebar-float-toggle--visible {
+  display: flex;
+}
+
+.sidebar-float-toggle:hover {
+  background: var(--color-ink-secondary);
+  color: white;
+  border-color: var(--color-ink-secondary);
+}
+
 .sidebar--collapsed {
   width: 48px;
+}
+
+.sidebar--collapsed .sidebar-toggle {
+  margin: 0 auto;
 }
 
 .sidebar-header {
