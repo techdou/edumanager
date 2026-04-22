@@ -13,19 +13,22 @@
     </header>
 
     <div class="lecture-body">
+      <!-- Mobile hamburger button (shows when sidebar is hidden on mobile) -->
+      <button
+        class="mobile-sidebar-btn"
+        :class="{ 'mobile-sidebar-btn--visible': sidebarCollapsed }"
+        @click="sidebarCollapsed = false"
+        title="打开目录"
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="3" y1="6" x2="21" y2="6"/>
+          <line x1="3" y1="12" x2="21" y2="12"/>
+          <line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+
       <!-- Sidebar: chapters or TOC -->
       <aside class="sidebar" :class="{ 'sidebar--collapsed': sidebarCollapsed }">
-        <!-- Floating sidebar toggle (visible when sidebar is collapsed) -->
-        <button 
-          class="sidebar-float-toggle"
-          :class="{ 'sidebar-float-toggle--visible': sidebarCollapsed }"
-          @click="sidebarCollapsed = false"
-          title="展开目录"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-            <path d="M13 17l5-5-5-5M6 17l5-5-5-5"/>
-          </svg>
-        </button>
         <div class="sidebar-header">
           <h3 class="sidebar-title">{{ toc ? '章节导航' : '章节目录' }}</h3>
           <button 
@@ -564,6 +567,39 @@ watch(currentChapter, () => loadLecture())
 }
 
 @media (max-width: 768px) {
+  .lecture-body {
+    position: relative;
+  }
+
+  /* Mobile hamburger button (outside sidebar) */
+  .mobile-sidebar-btn {
+    display: none;
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    z-index: 200;
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-md);
+    border: none;
+    background: var(--color-surface);
+    color: var(--color-ink-secondary);
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+    box-shadow: var(--shadow-md);
+    transition: all var(--duration-fast) var(--ease-out-expo);
+  }
+
+  .mobile-sidebar-btn--visible {
+    display: flex;
+  }
+
+  .mobile-sidebar-btn:active {
+    background: var(--color-ink-secondary);
+    color: white;
+  }
+
   .sidebar {
     position: absolute;
     z-index: 50;
@@ -571,12 +607,12 @@ watch(currentChapter, () => loadLecture())
     transform: translateX(0);
     transition: transform var(--duration-slow) var(--ease-out-expo);
   }
-  
+
   .sidebar--collapsed {
     transform: translateX(-100%);
     width: 280px;
   }
-  
+
   .lecture-title {
     font-size: var(--text-base);
   }
