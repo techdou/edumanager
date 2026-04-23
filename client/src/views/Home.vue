@@ -3,12 +3,16 @@
     <header class="main-header">
       <div class="container header-content">
         <div class="brand">
-          <span class="brand-icon">📚</span>
+          <svg class="brand-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 2L2 7L12 12L22 7L12 2Z" fill="currentColor" opacity="0.9"/>
+            <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
           <span class="brand-name">EduManager</span>
         </div>
         <nav class="nav">
           <template v-if="isLoggedIn">
-            <span class="nav-link nav-link--user">👋 {{ studentUsername }}</span>
+            <span class="nav-link nav-link--user">{{ studentUsername }}</span>
             <button class="nav-link" @click="logout">退出</button>
           </template>
           <template v-else>
@@ -52,7 +56,16 @@
       
       <!-- Empty State -->
       <div v-else-if="filteredLectures.length === 0" class="empty-state">
-        <div class="empty-state-icon">📭</div>
+        <div class="empty-state-icon">
+          <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="8" y="16" width="48" height="36" rx="4" fill="oklch(0.9 0.02 260)" stroke="oklch(0.7 0.02 260)" stroke-width="2"/>
+            <path d="M8 28H56" stroke="oklch(0.7 0.02 260)" stroke-width="2"/>
+            <rect x="14" y="34" width="16" height="4" rx="2" fill="oklch(0.7 0.02 260)" opacity="0.5"/>
+            <rect x="14" y="42" width="24" height="4" rx="2" fill="oklch(0.7 0.02 260)" opacity="0.3"/>
+            <circle cx="46" cy="46" r="10" fill="oklch(0.95 0.05 35)" stroke="oklch(0.8 0.05 35)" stroke-width="2"/>
+            <path d="M42 46H50M46 42V50" stroke="oklch(0.5 0.08 35)" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </div>
         <h3 class="empty-state-title">暂无讲义</h3>
         <p class="empty-state-desc">
           管理员尚未上传任何讲义内容。<br>
@@ -158,14 +171,16 @@ onUnmounted(() => {
 }
 
 .brand-icon {
-  font-size: var(--text-xl);
+  color: var(--color-brand);
+  flex-shrink: 0;
 }
 
 .brand-name {
   font-family: var(--font-display);
-  font-size: var(--text-lg);
+  font-size: var(--text-xl);
   font-weight: 700;
-  color: var(--color-ink);
+  color: var(--color-brand);
+  letter-spacing: -0.02em;
 }
 
 .nav {

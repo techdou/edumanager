@@ -25,6 +25,11 @@
   --color-primary-hover: oklch(0.5 0.2 250);
   --color-primary-subtle: oklch(0.95 0.04 250);
   
+  /* Brand (education warm terracotta - matches techdou.com) */
+  --color-brand: oklch(0.55 0.15 35);
+  --color-brand-hover: oklch(0.5 0.18 35);
+  --color-brand-subtle: oklch(0.95 0.03 35);
+  
   /* Semantic */
   --color-success: oklch(0.55 0.18 145);
   --color-warning: oklch(0.7 0.15 85);
