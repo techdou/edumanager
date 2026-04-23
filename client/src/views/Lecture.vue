@@ -13,6 +13,19 @@
     </header>
 
     <div class="lecture-body">
+      <!-- Floating toggle (visible when sidebar collapsed on PC) -->
+      <button
+        v-if="!isMobile"
+        class="sidebar-pc-toggle"
+        :class="{ 'sidebar-pc-toggle--visible': sidebarCollapsed }"
+        @click="sidebarCollapsed = false"
+        title="展开目录"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M13 17l5-5-5-5M6 17l5-5-5-5"/>
+        </svg>
+      </button>
+
       <!-- Mobile hamburger button (shows when sidebar is hidden on mobile) -->
       <button
         class="mobile-sidebar-btn"
@@ -90,6 +103,13 @@
         </nav>
       </aside>
 
+      <!-- Mobile backdrop (closes sidebar when tapped) -->
+      <div
+        v-if="isMobile && !sidebarCollapsed"
+        class="mobile-backdrop"
+        @click="sidebarCollapsed = true"
+      ></div>
+
       <!-- Viewer -->
       <main class="viewer">
         <div v-if="loading" class="viewer-loading">
@@ -126,6 +146,8 @@ const route = useRoute()
 const slug = computed(() => route.params.slug)
 const currentChapter = computed(() => route.params.chapter)
 const sidebarCollapsed = ref(false)
+const isMobile = ref(window.innerWidth <= 768)
+window.addEventListener('resize', () => { isMobile.value = window.innerWidth <= 768 })
 const loading = ref(true)
 const viewerFrame = ref(null)
 
@@ -335,6 +357,38 @@ watch(currentChapter, () => loadLecture())
 }
 
 /* Floating toggle (outside sidebar, appears when collapsed) */
+/* PC floating toggle */
+.sidebar-pc-toggle {
+  display: none;
+  position: fixed;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  width: 32px;
+  height: 64px;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  border: 1px solid var(--color-ink-divider);
+  border-left: none;
+  background: var(--color-surface);
+  color: var(--color-ink-tertiary);
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  box-shadow: var(--shadow-sm);
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+
+.sidebar-pc-toggle--visible {
+  display: flex;
+}
+
+.sidebar-pc-toggle:hover {
+  background: var(--color-ink-secondary);
+  color: white;
+  border-color: var(--color-ink-secondary);
+}
+
 .sidebar-float-toggle {
   display: none;
   position: absolute;
@@ -366,7 +420,10 @@ watch(currentChapter, () => loadLecture())
 }
 
 .sidebar--collapsed {
-  width: 48px;
+  width: 0;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
 }
 
 .sidebar--collapsed .sidebar-toggle {
@@ -566,7 +623,20 @@ watch(currentChapter, () => loadLecture())
   padding: var(--space-8);
 }
 
+/* Mobile backdrop */
+.mobile-backdrop {
+  display: none;
+}
+
 @media (max-width: 768px) {
+  .mobile-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.3);
+    z-index: 40;
+  }
+
   .lecture-body {
     position: relative;
   }
