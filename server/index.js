@@ -6,8 +6,7 @@ const db = require('./db');
 const authRoutes = require('./routes/auth');
 const lectureRoutes = require('./routes/lecture');
 const categoryRoutes = require('./routes/category');
-const profileRoutes = require('./routes/profile');
-const adminAuth = require('./middleware/adminAuth');
+const adminRoutes = require('./routes/admin');
 
 const app = express();
 const PORT = 3142;
@@ -23,7 +22,7 @@ app.use(express.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/lectures', lectureRoutes);
 app.use('/api/categories', categoryRoutes);
-app.use('/api/profile', profileRoutes);
+app.use('/api/admin', adminRoutes);
 
 app.use('/lectures', express.static(path.join(__dirname, '../lectures')));
 

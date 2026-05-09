@@ -3,12 +3,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 const routes = [
   {
     path: '/',
-    component: () => import('../views/Profile.vue')
-  },
-  {
-    path: '/lectures',
-    component: () => import('../views/Home.vue'),
-    meta: { requiresStudent: true }
+    component: () => import('../views/Home.vue')
   },
   {
     path: '/login',
@@ -32,19 +27,31 @@ const routes = [
     component: () => import('../views/admin/Register.vue')
   },
   {
-    path: '/admin/dashboard',
-    component: () => import('../views/admin/Dashboard.vue'),
-    meta: { requiresAdmin: true }
-  },
-  {
-    path: '/admin/upload',
-    component: () => import('../views/admin/Upload.vue'),
-    meta: { requiresAdmin: true }
-  },
-  {
-    path: '/admin/profile',
-    component: () => import('../views/admin/ProfileUpload.vue'),
-    meta: { requiresAdmin: true }
+    path: '/admin',
+    component: () => import('../views/admin/AdminLayout.vue'),
+    meta: { requiresAdmin: true },
+    children: [
+      {
+        path: 'dashboard',
+        component: () => import('../views/admin/Stats.vue')
+      },
+      {
+        path: 'users',
+        component: () => import('../views/admin/Users.vue')
+      },
+      {
+        path: 'categories',
+        component: () => import('../views/admin/Categories.vue')
+      },
+      {
+        path: 'lectures',
+        component: () => import('../views/admin/Dashboard.vue')
+      },
+      {
+        path: 'upload',
+        component: () => import('../views/admin/Upload.vue')
+      }
+    ]
   }
 ]
 
