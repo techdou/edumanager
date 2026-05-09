@@ -55,6 +55,12 @@ const routes = [
   }
 ]
 
+// 兜底路由：未知路径重定向到首页（如旧的 /lectures 书签）
+routes.push({
+  path: '/:pathMatch(.*)*',
+  redirect: '/'
+})
+
 const router = createRouter({
   history: createWebHistory(),
   routes
