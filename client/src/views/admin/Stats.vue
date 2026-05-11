@@ -13,9 +13,9 @@
       <section class="panel trend-panel">
         <div class="panel-header">
           <h2>注册趋势</h2>
-          <span>最近 30 天</span>
+          <span>最近 7 天</span>
         </div>
-        <div v-if="registrations.length" class="bar-chart" aria-label="最近 30 天注册趋势">
+        <div v-if="registrations.length" class="bar-chart" aria-label="最近 7 天注册趋势">
           <div
             v-for="item in registrations"
             :key="item.date"
@@ -233,7 +233,7 @@ function statusText(status) {
 .bar-chart {
   height: 260px;
   display: grid;
-  grid-template-columns: repeat(30, minmax(8px, 1fr));
+  grid-template-columns: repeat(7, minmax(30px, 1fr));
   gap: 6px;
   align-items: end;
   padding-top: 18px;
@@ -405,7 +405,7 @@ function statusText(status) {
 
   .bar-chart {
     overflow-x: auto;
-    grid-template-columns: repeat(30, 20px);
+    grid-template-columns: repeat(7, minmax(30px, 1fr));
   }
 
   .user-row {

@@ -289,18 +289,18 @@ router.get('/stats/overview', (req, res) => {
   });
 });
 
-// 最近 30 天注册趋势
+// 最近 7 天注册趋势
 router.get('/stats/registrations', (req, res) => {
   const rows = db.query(`
     SELECT date(created_at) AS date, COUNT(*) AS count
     FROM students
-    WHERE date(created_at) >= date('now', '-29 days')
+    WHERE date(created_at) >= date('now', '-6 days')
     GROUP BY date(created_at)
   `);
   const countsByDate = new Map(rows.map(row => [row.date, Number(row.count)]));
   const trend = [];
 
-  for (let i = 29; i >= 0; i -= 1) {
+  for (let i = 6; i >= 0; i -= 1) {
     const date = new Date();
     date.setDate(date.getDate() - i);
     const key = [
