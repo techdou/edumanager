@@ -29,9 +29,16 @@ app.use('/api/knowledge', knowledgeRoutes);
 app.use('/lectures', express.static(path.join(__dirname, '../lectures')));
 
 const distPath = path.join(__dirname, '../client/dist');
-app.use(express.static(distPath));
+app.use(express.static(distPath, {
+  setHeaders(res, filePath) {
+    if (filePath.endsWith('index.html')) {
+      res.setHeader('Cache-Control', 'no-store');
+    }
+  }
+}));
 app.get('*', (req, res) => {
   console.log('[CATCHALL]', req.url);
+  res.setHeader('Cache-Control', 'no-store');
   res.sendFile(path.join(distPath, 'index.html'));
 });
 

@@ -75,12 +75,17 @@
             <div class="resource-preview">
               <MarkdownPreview v-if="doc.file_type === 'markdown'" :doc-id="doc.id" />
               <iframe
-                v-else
+                v-else-if="doc.file_type === 'pdf'"
                 :src="doc.file_url || doc.url"
                 :title="doc.title"
                 loading="lazy"
               ></iframe>
-              <div class="preview-fallback">
+              <div v-else class="external-preview">
+                <span class="external-preview-badge">{{ docHost(doc.url) }}</span>
+                <strong>{{ doc.title }}</strong>
+                <p>{{ doc.summary || '飞书网页通常不允许 iframe 内嵌，这里展示文档简介并提供安全跳转。' }}</p>
+              </div>
+              <div v-if="doc.file_type" class="preview-fallback">
                 <span>{{ previewHint(doc) }}</span>
               </div>
             </div>
@@ -247,7 +252,15 @@ function firstChapterPath(lecture) {
 function previewHint(doc) {
   if (doc.file_type === 'markdown') return 'Markdown / Mermaid 预览'
   if (doc.file_type === 'pdf') return 'PDF 预览'
-  return '飞书可能限制内嵌预览'
+  return '文档预览'
+}
+
+function docHost(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '')
+  } catch {
+    return '外部知识库'
+  }
 }
 
 const filteredLectures = computed(() => {
@@ -508,6 +521,50 @@ onUnmounted(() => {
   height: 100%;
   border: 0;
   background: white;
+}
+
+.external-preview {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  background:
+    linear-gradient(135deg, oklch(0.98 0.02 225), oklch(0.98 0.02 150)),
+    var(--color-surface);
+}
+
+.external-preview-badge {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: oklch(1 0 0 / 0.78);
+  color: var(--color-brand);
+  font-size: var(--text-xs);
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.external-preview strong {
+  color: var(--color-ink);
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  line-height: 1.35;
+}
+
+.external-preview p {
+  display: -webkit-box;
+  color: var(--color-ink-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .lecture-preview iframe {
