@@ -54,6 +54,7 @@ async function initDb() {
         slug TEXT UNIQUE NOT NULL,
         zip_name TEXT NOT NULL,
         category_id INTEGER,
+        cover_path TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
@@ -92,6 +93,7 @@ async function initDb() {
         file_path TEXT,
         file_name TEXT,
         file_type TEXT,
+        cover_path TEXT,
         is_featured INTEGER DEFAULT 1,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -121,6 +123,7 @@ function ensureSchema() {
   ensureColumn('students', 'email', 'email TEXT');
   ensureColumn('students', 'status', "status TEXT DEFAULT 'active'");
   ensureColumn('students', 'last_login', 'last_login DATETIME');
+  ensureColumn('lectures', 'cover_path', 'cover_path TEXT');
 
   db.run(`
     CREATE TABLE IF NOT EXISTS user_activity (
@@ -145,6 +148,7 @@ function ensureSchema() {
       file_path TEXT,
       file_name TEXT,
       file_type TEXT,
+      cover_path TEXT,
       is_featured INTEGER DEFAULT 1,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -153,6 +157,7 @@ function ensureSchema() {
   ensureColumn('knowledge_docs', 'file_path', 'file_path TEXT');
   ensureColumn('knowledge_docs', 'file_name', 'file_name TEXT');
   ensureColumn('knowledge_docs', 'file_type', 'file_type TEXT');
+  ensureColumn('knowledge_docs', 'cover_path', 'cover_path TEXT');
 
   db.run('CREATE INDEX IF NOT EXISTS idx_user_activity_user_id ON user_activity(user_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_user_activity_created_at ON user_activity(created_at)');

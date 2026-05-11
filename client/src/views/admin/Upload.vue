@@ -54,6 +54,22 @@
             </div>
           </div>
 
+          <div class="form-group">
+            <label class="form-label">封面图（可选）</label>
+            <div class="file-upload">
+              <input type="file" @change="handleCover" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" class="file-input" />
+              <div class="file-upload-label">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="5" width="18" height="14" rx="2"/>
+                  <path d="M8 11.5 10.5 14 14 10l4 5"/>
+                  <circle cx="8" cy="9" r="1"/>
+                </svg>
+                <span v-if="cover">{{ cover.name }}</span>
+                <span v-else>点击选择 JPG / PNG / WebP</span>
+              </div>
+            </div>
+          </div>
+
           <section v-if="precheckLoading || zipCheck" class="precheck-panel">
             <div class="precheck-header">
               <strong>ZIP 结构预检</strong>
@@ -131,6 +147,7 @@ const title = ref('')
 const slug = ref('')
 const categoryId = ref(null)
 const file = ref(null)
+const cover = ref(null)
 const categories = ref([])
 const uploading = ref(false)
 const precheckLoading = ref(false)
@@ -171,6 +188,17 @@ async function handleFile(e) {
     error.value = e.response?.data?.error || 'ZIP 结构预检失败'
   } finally {
     precheckLoading.value = false
+  }
+}
+
+function handleCover(e) {
+  cover.value = e.target.files[0] || null
+  error.value = ''
+  success.value = ''
+  if (!cover.value) return
+  if (!/\.(jpe?g|png|webp)$/i.test(cover.value.name)) {
+    error.value = '封面图仅支持 JPG、PNG、WebP'
+    cover.value = null
   }
 }
 
@@ -226,6 +254,7 @@ async function upload() {
   formData.append('title', title.value)
   formData.append('slug', slug.value)
   formData.append('categoryId', categoryId.value)
+  if (cover.value) formData.append('cover', cover.value)
 
   try {
     const token = localStorage.getItem('adminToken')

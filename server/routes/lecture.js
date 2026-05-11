@@ -18,8 +18,10 @@ const upload = multer({
 });
 
 const lecturesRoot = path.resolve(__dirname, '../../lectures');
+const coverRoot = path.resolve(__dirname, '../../data/covers/lectures');
 fs.mkdirSync(path.join(__dirname, '../uploads'), { recursive: true });
 fs.mkdirSync(lecturesRoot, { recursive: true });
+fs.mkdirSync(coverRoot, { recursive: true });
 
 function isValidSlug(slug) {
   return /^[a-zA-Z0-9][a-zA-Z0-9_-]{1,80}$/.test(slug);
@@ -37,6 +39,40 @@ function cleanupUpload(file) {
   if (file?.path && fs.existsSync(file.path)) {
     fs.unlinkSync(file.path);
   }
+}
+
+function cleanupFiles(files = []) {
+  files.forEach(cleanupUpload);
+}
+
+function isAllowedCover(file) {
+  if (!file) return true;
+  const ext = path.extname(file.originalname).toLowerCase();
+  return ['.jpg', '.jpeg', '.png', '.webp'].includes(ext)
+    && ['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype);
+}
+
+function saveCover(file) {
+  if (!file) return null;
+  const ext = path.extname(file.originalname).toLowerCase();
+  const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
+  fs.renameSync(file.path, path.join(coverRoot, fileName));
+  return fileName;
+}
+
+function safeCoverPath(relativePath) {
+  const target = path.resolve(coverRoot, relativePath || '');
+  if (!target.startsWith(`${coverRoot}${path.sep}`)) {
+    throw new Error('Invalid cover path');
+  }
+  return target;
+}
+
+function getPublicLecture(lecture) {
+  return {
+    ...lecture,
+    cover_url: lecture.cover_path ? `/api/lectures/${lecture.id}/cover` : null
+  };
 }
 
 function inspectZip(filePath) {
@@ -112,7 +148,7 @@ router.post('/precheck', adminAuth, (req, res, next) => {
 // 讲义列表
 router.get('/', (req, res) => {
   const lectures = db.query(`
-    SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.created_at,
+    SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.created_at,
            c.name as category_name
     FROM lectures l 
     LEFT JOIN categories c ON l.category_id = c.id 
@@ -125,7 +161,7 @@ router.get('/', (req, res) => {
       SELECT id, lecture_id, title, slug, path, order_index 
       FROM chapters WHERE lecture_id = ? ORDER BY order_index
     `, [lecture.id]);
-    return { ...lecture, chapters };
+    return getPublicLecture({ ...lecture, chapters });
   });
   
   res.json(lecturesWithChapters);
@@ -133,7 +169,10 @@ router.get('/', (req, res) => {
 
 // 上传 ZIP 讲义
 router.post('/', adminAuth, (req, res, next) => {
-  upload.single('file')(req, res, (err) => {
+  upload.fields([
+    { name: 'file', maxCount: 1 },
+    { name: 'cover', maxCount: 1 }
+  ])(req, res, (err) => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') {
         return res.status(400).json({ error: '文件大小超过 200MB 限制' });
@@ -146,38 +185,46 @@ router.post('/', adminAuth, (req, res, next) => {
   const title = String(req.body.title || '').trim();
   const slug = String(req.body.slug || '').trim();
   const categoryId = Number(req.body.categoryId);
-  const file = req.file;
+  const file = req.files?.file?.[0];
+  const cover = req.files?.cover?.[0];
   
   if (!file || !title || !slug || !categoryId) {
-    cleanupUpload(file);
+    cleanupFiles([file, cover]);
     return res.status(400).json({ error: '所有字段必填' });
   }
 
   if (!isValidSlug(slug)) {
-    cleanupUpload(file);
+    cleanupFiles([file, cover]);
     return res.status(400).json({ error: 'URL 标识只能包含英文、数字、下划线和短横线，长度 2-81 位' });
   }
 
   const category = db.get('SELECT id FROM categories WHERE id = ?', [categoryId]);
   if (!category) {
-    cleanupUpload(file);
+    cleanupFiles([file, cover]);
     return res.status(400).json({ error: '分类不存在' });
   }
 
   const existing = db.get('SELECT id FROM lectures WHERE slug = ?', [slug]);
   if (existing) {
-    cleanupUpload(file);
+    cleanupFiles([file, cover]);
     return res.status(400).json({ error: 'URL 标识已存在' });
   }
   
   if (!file.originalname.toLowerCase().endsWith('.zip')) {
-    cleanupUpload(file);
+    cleanupFiles([file, cover]);
     return res.status(400).json({ error: '仅支持 ZIP 文件' });
   }
+
+  if (!isAllowedCover(cover)) {
+    cleanupFiles([file, cover]);
+    return res.status(400).json({ error: '封面图仅支持 JPG、PNG、WebP' });
+  }
   
+  let coverPath = null;
   try {
     const zipName = path.parse(file.originalname).name;
     const extractPath = safeLecturePath(slug);
+    coverPath = saveCover(cover);
     
     // 清理旧目录
     if (fs.existsSync(extractPath)) {
@@ -195,8 +242,8 @@ router.post('/', adminAuth, (req, res, next) => {
     
     // 创建讲义记录
     const result = db.run(`
-      INSERT INTO lectures (title, slug, zip_name, category_id) VALUES (?, ?, ?, ?)
-    `, [title, slug, zipName, categoryId]);
+      INSERT INTO lectures (title, slug, zip_name, category_id, cover_path) VALUES (?, ?, ?, ?, ?)
+    `, [title, slug, zipName, categoryId, coverPath]);
     
     const lectureId = result.lastInsertRowid;
     
@@ -246,14 +293,32 @@ router.post('/', adminAuth, (req, res, next) => {
       id: lectureId, 
       title, 
       slug, 
+      cover_url: coverPath ? `/api/lectures/${lectureId}/cover` : null,
       chapters
     });
     
   } catch (err) {
     console.error('ZIP 处理错误:', err);
-    cleanupUpload(file);
+    cleanupFiles([file, cover]);
+    if (coverPath) {
+      const savedCoverPath = safeCoverPath(coverPath);
+      if (fs.existsSync(savedCoverPath)) fs.unlinkSync(savedCoverPath);
+    }
     res.status(500).json({ error: 'ZIP 解压失败' });
   }
+});
+
+router.get('/:id/cover', (req, res) => {
+  const lecture = db.get('SELECT cover_path FROM lectures WHERE id = ?', [req.params.id]);
+  if (!lecture?.cover_path) {
+    return res.status(404).send('Cover not found');
+  }
+
+  const coverPath = safeCoverPath(lecture.cover_path);
+  if (!fs.existsSync(coverPath)) {
+    return res.status(404).send('Cover not found');
+  }
+  res.sendFile(coverPath);
 });
 
 // 删除讲义
@@ -273,6 +338,11 @@ router.delete('/:id', adminAuth, (req, res) => {
   const lecturePath = safeLecturePath(lecture.slug);
   if (fs.existsSync(lecturePath)) {
     fs.rmSync(lecturePath, { recursive: true, force: true });
+  }
+
+  if (lecture.cover_path) {
+    const coverPath = safeCoverPath(lecture.cover_path);
+    if (fs.existsSync(coverPath)) fs.unlinkSync(coverPath);
   }
   
   res.json({ success: true });
@@ -297,7 +367,7 @@ router.put('/:id/category', adminAuth, (req, res) => {
 
   db.run('UPDATE lectures SET category_id = ? WHERE id = ?', [categoryId, id]);
   const updated = db.get(`
-    SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.created_at,
+    SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.created_at,
            c.name as category_name
     FROM lectures l
     LEFT JOIN categories c ON l.category_id = c.id
@@ -307,7 +377,7 @@ router.put('/:id/category', adminAuth, (req, res) => {
     SELECT id, lecture_id, title, slug, path, order_index
     FROM chapters WHERE lecture_id = ? ORDER BY order_index
   `, [id]);
-  res.json(updated);
+  res.json(getPublicLecture(updated));
 });
 
 // Get TOC for a specific chapter

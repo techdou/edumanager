@@ -35,7 +35,7 @@
         <input
           v-if="form.mode === 'link' || editingId"
           v-model="form.url"
-          :required="form.mode === 'link' || Boolean(editingId)"
+          :required="form.mode === 'link'"
           placeholder="https://xxx.feishu.cn/wiki/..."
         />
         <input
@@ -44,6 +44,15 @@
           accept=".pdf,.md,.markdown,.mdown,.mkd"
           required
           @change="handleFile"
+        />
+      </label>
+
+      <label>
+        <span>封面图（可选）</span>
+        <input
+          type="file"
+          accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+          @change="handleCover"
         />
       </label>
 
@@ -114,7 +123,8 @@ const form = reactive({
   categoryId: '',
   isFeatured: true,
   mode: 'link',
-  file: null
+  file: null,
+  cover: null
 })
 
 onMounted(loadData)
@@ -150,7 +160,8 @@ function resetForm() {
     categoryId: '',
     isFeatured: true,
     mode: 'link',
-    file: null
+    file: null,
+    cover: null
   })
   error.value = ''
 }
@@ -164,7 +175,8 @@ function editDoc(doc) {
     categoryId: doc.category_id || '',
     isFeatured: Boolean(doc.is_featured),
     mode: doc.file_type ? 'file' : 'link',
-    file: null
+    file: null,
+    cover: null
   })
 }
 
@@ -172,35 +184,45 @@ function handleFile(event) {
   form.file = event.target.files?.[0] || null
 }
 
+function handleCover(event) {
+  const file = event.target.files?.[0] || null
+  if (file && !/\.(jpe?g|png|webp)$/i.test(file.name)) {
+    error.value = '封面图仅支持 JPG、PNG、WebP'
+    form.cover = null
+    event.target.value = ''
+    return
+  }
+  form.cover = file
+  error.value = ''
+}
+
+function appendDocFields(formData) {
+  formData.append('title', form.title)
+  formData.append('url', form.url)
+  formData.append('summary', form.summary)
+  formData.append('categoryId', form.categoryId ? String(form.categoryId) : '')
+  formData.append('source', 'feishu')
+  formData.append('isFeatured', form.isFeatured ? '1' : '0')
+  if (form.cover) formData.append('cover', form.cover)
+}
+
 async function saveDoc() {
   saving.value = true
   error.value = ''
-  const payload = {
-    title: form.title,
-    url: form.url,
-    summary: form.summary,
-    categoryId: form.categoryId ? Number(form.categoryId) : null,
-    source: 'feishu',
-    isFeatured: form.isFeatured
-  }
-
   try {
+    const formData = new FormData()
+    appendDocFields(formData)
     if (!editingId.value && form.mode === 'file') {
       if (!form.file) {
         error.value = '请选择 PDF 或 Markdown 文件'
         return
       }
-      const formData = new FormData()
       formData.append('file', form.file)
-      formData.append('title', form.title)
-      formData.append('summary', form.summary)
-      formData.append('categoryId', form.categoryId ? String(form.categoryId) : '')
-      formData.append('isFeatured', form.isFeatured ? '1' : '0')
       await axios.post('/api/knowledge/upload', formData, { headers: headers() })
     } else if (editingId.value) {
-      await axios.put(`/api/knowledge/${editingId.value}`, payload, { headers: headers() })
+      await axios.put(`/api/knowledge/${editingId.value}`, formData, { headers: headers() })
     } else {
-      await axios.post('/api/knowledge', payload, { headers: headers() })
+      await axios.post('/api/knowledge', formData, { headers: headers() })
     }
     resetForm()
     await loadData()

@@ -73,7 +73,14 @@
         <div class="knowledge-grid">
           <article v-for="doc in knowledgeDocs" :key="doc.id" class="knowledge-card">
             <div class="resource-preview">
-              <MarkdownPreview v-if="doc.file_type === 'markdown'" :doc-id="doc.id" />
+              <img
+                v-if="doc.cover_url"
+                class="cover-image"
+                :src="doc.cover_url"
+                :alt="`${doc.title} 封面`"
+                loading="lazy"
+              />
+              <MarkdownPreview v-else-if="doc.file_type === 'markdown'" :doc-id="doc.id" />
               <iframe
                 v-else-if="doc.file_type === 'pdf'"
                 :src="doc.file_url || doc.url"
@@ -85,7 +92,7 @@
                 <strong>{{ doc.title }}</strong>
                 <p>{{ doc.summary || '飞书网页通常不允许 iframe 内嵌，这里展示文档简介并提供安全跳转。' }}</p>
               </div>
-              <div v-if="doc.file_type" class="preview-fallback">
+              <div v-if="doc.file_type && !doc.cover_url" class="preview-fallback">
                 <span>{{ previewHint(doc) }}</span>
               </div>
             </div>
@@ -153,8 +160,16 @@
       <!-- Lecture Grid -->
       <div v-else class="lecture-grid">
         <div v-for="lecture in filteredLectures" :key="lecture.id" class="lecture-card card">
-          <div v-if="firstChapterPath(lecture)" class="resource-preview lecture-preview">
+          <div v-if="lecture.cover_url || firstChapterPath(lecture)" class="resource-preview lecture-preview">
+            <img
+              v-if="lecture.cover_url"
+              class="cover-image"
+              :src="lecture.cover_url"
+              :alt="`${lecture.title} 封面`"
+              loading="lazy"
+            />
             <iframe
+              v-else
               :src="`/lectures/${firstChapterPath(lecture)}/index.html`"
               :title="`${lecture.title} 预览`"
               loading="lazy"
@@ -521,6 +536,14 @@ onUnmounted(() => {
   height: 100%;
   border: 0;
   background: white;
+}
+
+.cover-image {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  background: var(--color-bg);
 }
 
 .external-preview {
