@@ -23,10 +23,20 @@
       </div>
     </header>
 
+    <!-- Login Tip Toast -->
+    <Transition name="toast">
+      <div v-if="loginTipVisible" class="login-tip">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span>请先登录学生账号</span>
+        <router-link to="/login" class="login-tip-btn">去登录</router-link>
+      </div>
+    </Transition>
+
     <main class="main-content">
       <!-- Hero Section -->
       <section class="hero">
         <div class="hero-glow"></div>
+        <div class="hero-glow-secondary"></div>
         <div class="container hero-inner">
           <div class="hero-text">
             <p class="hero-eyebrow">🎓 智慧教育平台</p>
@@ -34,7 +44,7 @@
               让教学资源管理<br><span class="hero-gradient">更高效、更有序</span>
             </h1>
             <p class="hero-desc">
-              EduManager 为教育机构提供一站式讲义管理解决方案。上传、分类、分发课程资料，学生随时随地在线学习。
+              EduManager 为教育机构提供一站式讲义管理解决方案。<br class="hide-mobile">上传、分类、分发课程资料，学生随时随地在线学习。
             </p>
             <div class="hero-actions">
               <router-link v-if="!isLoggedIn" to="/register" class="hero-btn hero-btn--primary">
@@ -56,30 +66,51 @@
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
               </div>
               <h3>讲义管理</h3>
-              <p>上传 ZIP 讲义包，自动解析章节目录，支持分类管理与封面设置</p>
+              <p>上传 ZIP 讲义包，自动解析章节目录，支持分类与封面</p>
             </div>
             <div class="bento-card">
               <div class="bento-icon">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
               </div>
               <h3>在线学习</h3>
-              <p>学生端在线浏览讲义，支持目录导航、阅读进度跟踪与最近打开</p>
+              <p>在线浏览讲义，目录导航，阅读进度跟踪</p>
             </div>
             <div class="bento-card">
               <div class="bento-icon">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
               </div>
               <h3>知识库</h3>
-              <p>整合飞书知识文档，Markdown/PDF 在线预览，打造统一学习入口</p>
+              <p>整合飞书文档，Markdown/PDF 在线预览</p>
             </div>
             <div class="bento-card">
               <div class="bento-icon">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
               </div>
               <h3>用户管理</h3>
-              <p>管理员与学员角色分离，支持批量创建、状态管理与数据统计</p>
+              <p>管理员与学员角色分离，数据统计一目了然</p>
             </div>
           </div>
+        </div>
+        <!-- Hero → Content 过渡衔接 -->
+        <div class="hero-bridge">
+          <div class="bridge-line"></div>
+          <div class="bridge-stats">
+            <div class="bridge-stat">
+              <strong>{{ lectures.length }}</strong>
+              <span>份讲义</span>
+            </div>
+            <div class="bridge-divider"></div>
+            <div class="bridge-stat">
+              <strong>{{ categories.length }}</strong>
+              <span>个分类</span>
+            </div>
+            <div class="bridge-divider"></div>
+            <div class="bridge-stat">
+              <strong>{{ totalChapters }}</strong>
+              <span>个章节</span>
+            </div>
+          </div>
+          <div class="bridge-line"></div>
         </div>
       </section>
 
@@ -236,6 +267,10 @@
               sandbox="allow-scripts allow-same-origin"
             ></iframe>
             <div class="preview-fade"></div>
+            <div v-if="!isLoggedIn" class="preview-lock" @click="showLoginTip">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              <span>登录后查看</span>
+            </div>
           </div>
           <div class="lecture-header">
             <span class="lecture-category">{{ lecture.category_name || '未分类' }}</span>
@@ -244,15 +279,15 @@
           </div>
           
           <div class="chapters">
-            <router-link 
+            <a 
               v-for="chapter in lecture.chapters" 
               :key="chapter.id"
-              :to="`/lecture/${lecture.slug}/${chapter.slug}`"
               class="chapter-link"
+              @click.prevent="goLecture(lecture.slug, chapter.slug)"
             >
               <span class="chapter-dot"></span>
               {{ chapter.title }}
-            </router-link>
+            </a>
           </div>
         </div>
       </div>
@@ -277,11 +312,27 @@ const studentUsername = ref(localStorage.getItem('studentUsername') || '')
 const recentItems = ref([])
 
 const recentKey = 'edumanager:recentLectures'
+const loginTipVisible = ref(false)
+let loginTipTimer = null
 
 function updateLoginState() {
   isLoggedIn.value = !!localStorage.getItem('token')
   studentUsername.value = localStorage.getItem('studentUsername') || ''
   loadRecentItems()
+}
+
+function showLoginTip() {
+  loginTipVisible.value = true
+  clearTimeout(loginTipTimer)
+  loginTipTimer = setTimeout(() => { loginTipVisible.value = false }, 3000)
+}
+
+function goLecture(lectureSlug, chapterSlug) {
+  if (!isLoggedIn.value) {
+    showLoginTip()
+    return
+  }
+  window.location.href = `/lecture/${lectureSlug}/${chapterSlug}`
 }
 
 function logout() {
@@ -344,6 +395,8 @@ const filteredLectures = computed(() => {
   return lectures.value.filter(l => l.category_id === selectedCategory.value)
 })
 
+const totalChapters = computed(() => lectures.value.reduce((s, l) => s + (l.chapters?.length || 0), 0))
+
 onMounted(async () => {
   const [catRes, lecRes, knowledgeRes] = await Promise.all([
     axios.get('/api/categories'),
@@ -366,33 +419,103 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* ====== Login Tip Toast ====== */
+.login-tip {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  background: oklch(0.15 0.03 250);
+  color: white;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: 0 8px 32px oklch(0.15 0.03 250 / 0.3);
+}
+
+.login-tip-btn {
+  padding: 4px 14px;
+  background: oklch(0.55 0.18 250);
+  color: white;
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.login-tip-btn:hover {
+  background: oklch(0.5 0.2 250);
+}
+
+.toast-enter-active { transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+.toast-leave-active { transition: all 0.2s ease-in; }
+.toast-enter-from { opacity: 0; transform: translateX(-50%) translateY(-16px); }
+.toast-leave-to { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+
+/* ====== Preview Lock Overlay ====== */
+.preview-lock {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: oklch(1 0 0 / 0.75);
+  backdrop-filter: blur(4px);
+  color: var(--color-ink-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-out-expo);
+}
+
+.lecture-card:hover .preview-lock {
+  opacity: 1;
+}
+
 /* ====== Hero Section ====== */
 .hero {
   position: relative;
   overflow: hidden;
-  padding: var(--space-16) 0 var(--space-12);
-  background: var(--color-surface);
-  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-16) 0 0;
+  background: linear-gradient(180deg, oklch(0.98 0.01 250) 0%, var(--color-surface) 100%);
 }
 
 .hero-glow {
   position: absolute;
-  top: -40%;
-  right: -10%;
+  top: -30%;
+  right: -5%;
   width: 600px;
   height: 600px;
-  background: radial-gradient(circle, oklch(0.6 0.18 250 / 0.08) 0%, transparent 70%);
+  background: radial-gradient(circle, oklch(0.6 0.18 250 / 0.1) 0%, transparent 70%);
   pointer-events: none;
 }
 
-.hero::before {
+.hero-glow-secondary {
+  position: absolute;
+  top: 10%;
+  left: -8%;
+  width: 500px;
+  height: 500px;
+  background: radial-gradient(circle, oklch(0.6 0.15 35 / 0.06) 0%, transparent 65%);
+  pointer-events: none;
+}
+
+.hero::after {
   content: '';
   position: absolute;
-  bottom: -60%;
-  left: -5%;
-  width: 400px;
-  height: 400px;
-  background: radial-gradient(circle, oklch(0.6 0.15 35 / 0.06) 0%, transparent 70%);
+  bottom: 0;
+  right: 10%;
+  width: 300px;
+  height: 300px;
+  background: radial-gradient(circle, oklch(0.55 0.15 280 / 0.05) 0%, transparent 70%);
   pointer-events: none;
 }
 
@@ -416,16 +539,16 @@ onUnmounted(() => {
 }
 
 .hero-title {
-  font-family: var(--font-display);
-  font-size: clamp(32px, 4vw, 48px);
+  font-family: 'Sora', 'DM Sans', system-ui, sans-serif;
+  font-size: clamp(34px, 4.5vw, 52px);
   font-weight: 700;
-  line-height: 1.15;
-  letter-spacing: -0.03em;
+  line-height: 1.12;
+  letter-spacing: -0.04em;
   color: var(--color-ink);
 }
 
 .hero-gradient {
-  background: linear-gradient(135deg, oklch(0.55 0.18 250), oklch(0.55 0.15 35));
+  background: linear-gradient(135deg, oklch(0.5 0.2 250), oklch(0.6 0.18 280), oklch(0.55 0.15 35));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -433,9 +556,15 @@ onUnmounted(() => {
 
 .hero-desc {
   font-size: var(--text-base);
-  line-height: 1.7;
+  line-height: 1.75;
   color: var(--color-ink-secondary);
   max-width: 480px;
+}
+
+.hide-mobile { display: inline; }
+
+@media (max-width: 640px) {
+  .hide-mobile { display: none; }
 }
 
 .hero-actions {
@@ -537,6 +666,56 @@ onUnmounted(() => {
   color: var(--color-ink-tertiary);
 }
 
+/* Hero → Content Bridge */
+.hero-bridge {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  max-width: 1280px;
+  margin: var(--space-10) auto var(--space-8);
+  padding: 0 var(--space-6);
+}
+
+.bridge-line {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--color-border), transparent);
+}
+
+.bridge-stats {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+}
+
+.bridge-stat {
+  text-align: center;
+}
+
+.bridge-stat strong {
+  display: block;
+  font-family: 'Sora', system-ui, sans-serif;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--color-primary);
+  line-height: 1;
+}
+
+.bridge-stat span {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-ink-tertiary);
+  letter-spacing: 0.04em;
+}
+
+.bridge-divider {
+  width: 1px;
+  height: 32px;
+  background: var(--color-border);
+}
+
 @media (max-width: 900px) {
   .hero-inner {
     grid-template-columns: 1fr;
@@ -550,11 +729,19 @@ onUnmounted(() => {
 
 @media (max-width: 640px) {
   .hero {
-    padding: var(--space-10) 0 var(--space-8);
+    padding: var(--space-10) 0 0;
   }
 
   .hero-bento {
     grid-template-columns: 1fr;
+  }
+
+  .bridge-stats {
+    gap: var(--space-4);
+  }
+
+  .bridge-stat strong {
+    font-size: 20px;
   }
 }
 
