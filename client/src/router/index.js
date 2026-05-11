@@ -48,6 +48,10 @@ const routes = [
         component: () => import('../views/admin/Dashboard.vue')
       },
       {
+        path: 'knowledge',
+        component: () => import('../views/admin/Knowledge.vue')
+      },
+      {
         path: 'upload',
         component: () => import('../views/admin/Upload.vue')
       }

@@ -1,18 +1,5 @@
 <template>
-  <div class="upload-page">
-    <header class="page-header">
-      <div class="container header-content">
-        <router-link to="/admin/dashboard" class="back-link">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-            <path d="M19 12H5M12 19l-7-7 7-7"/>
-          </svg>
-          <span>返回列表</span>
-        </router-link>
-        <h1 class="page-title">上传讲义</h1>
-      </div>
-    </header>
-
-    <main class="container main-content">
+  <section class="upload-page">
       <div class="upload-grid">
         <!-- Upload Form -->
         <div class="upload-form card">
@@ -27,6 +14,7 @@
             <label class="form-label">URL 标识</label>
             <input v-model="slug" placeholder="例如：ai_learning" required class="input" />
             <p class="form-hint">访问路径: <code>/lecture/{{ slug || '...' }}</code></p>
+            <p class="form-hint">仅支持英文、数字、下划线和短横线，避免空格和中文路径。</p>
           </div>
 
           <div class="form-group">
@@ -66,6 +54,29 @@
             </div>
           </div>
 
+          <section v-if="precheckLoading || zipCheck" class="precheck-panel">
+            <div class="precheck-header">
+              <strong>ZIP 结构预检</strong>
+              <span v-if="precheckLoading">检查中...</span>
+              <span v-else-if="zipCheck">{{ zipCheck.mode === 'multi-chapter' ? '多章节' : '单页讲义' }}</span>
+            </div>
+            <template v-if="zipCheck">
+              <div class="precheck-stats">
+                <span>{{ zipCheck.entryCount }} 个条目</span>
+                <span>{{ zipCheck.htmlCount }} 个 HTML</span>
+                <span>{{ zipCheck.chapters.length || 1 }} 个章节候选</span>
+              </div>
+              <div v-if="zipCheck.missingIndex.length > 0" class="precheck-warning">
+                <strong>缺少 index.html</strong>
+                <span>{{ zipCheck.missingIndex.map(item => item.name).join('、') }}</span>
+              </div>
+              <ul v-if="zipCheck.warnings.length > 0" class="precheck-list">
+                <li v-for="item in zipCheck.warnings" :key="item">{{ item }}</li>
+              </ul>
+              <p v-else class="precheck-ok">结构看起来很好，可以上传。</p>
+            </template>
+          </section>
+
           <div v-if="error" class="error-alert">
             <span>⚠️</span>
             <span>{{ error }}</span>
@@ -76,7 +87,7 @@
             <span>{{ success }}</span>
           </div>
 
-          <button @click="upload" class="btn btn-primary" :disabled="uploading">
+          <button @click="upload" class="btn btn-primary" :disabled="uploading || precheckLoading">
             <span v-if="uploading">正在上传...</span>
             <span v-else>上传讲义</span>
           </button>
@@ -87,9 +98,9 @@
           <h2 class="form-title">ZIP 结构要求</h2>
           
           <ul class="help-list">
-            <li>ZIP 文件名作为一级路径</li>
-            <li>内部目录作为章节路径</li>
-            <li>每个目录必须包含 index.html</li>
+            <li>URL 标识作为讲义一级路径</li>
+            <li>内部目录作为章节路径，单个 HTML 也可直接放在根目录</li>
+            <li>每个章节目录必须包含 index.html</li>
             <li>支持 images 等资源文件夹</li>
           </ul>
           
@@ -107,8 +118,7 @@ ai_learning.zip
           </div>
         </div>
       </div>
-    </main>
-  </div>
+  </section>
 </template>
 
 <script setup>
@@ -123,8 +133,10 @@ const categoryId = ref(null)
 const file = ref(null)
 const categories = ref([])
 const uploading = ref(false)
+const precheckLoading = ref(false)
 const error = ref('')
 const success = ref('')
+const zipCheck = ref(null)
 
 onMounted(async () => {
   const res = await axios.get('/api/categories')
@@ -134,8 +146,32 @@ onMounted(async () => {
   }
 })
 
-function handleFile(e) {
+async function handleFile(e) {
   file.value = e.target.files[0]
+  error.value = ''
+  success.value = ''
+  zipCheck.value = null
+
+  if (!file.value) return
+  if (!file.value.name.toLowerCase().endsWith('.zip')) {
+    error.value = '仅支持 ZIP 文件'
+    return
+  }
+
+  precheckLoading.value = true
+  try {
+    const formData = new FormData()
+    formData.append('file', file.value)
+    const token = localStorage.getItem('adminToken')
+    const res = await axios.post('/api/lectures/precheck', formData, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    })
+    zipCheck.value = res.data
+  } catch (e) {
+    error.value = e.response?.data?.error || 'ZIP 结构预检失败'
+  } finally {
+    precheckLoading.value = false
+  }
 }
 
 const showNewCategory = ref(false)
@@ -166,8 +202,15 @@ async function upload() {
     error.value = '请填写讲义标题'
     return
   }
+  slug.value = slug.value.trim()
+  title.value = title.value.trim()
+
   if (!slug.value) {
     error.value = '请填写 URL 标识'
+    return
+  }
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{1,80}$/.test(slug.value)) {
+    error.value = 'URL 标识只能包含英文、数字、下划线和短横线，长度 2-81 位'
     return
   }
   if (!categoryId.value) {
@@ -190,7 +233,7 @@ async function upload() {
       headers: token ? { Authorization: `Bearer ${token}` } : {}
     })
     success.value = '上传成功！即将跳转...'
-    setTimeout(() => router.push('/admin/dashboard'), 1500)
+    setTimeout(() => router.push('/admin/lectures'), 1500)
   } catch (e) {
     const status = e.response?.status
     const msg = e.response?.data?.error
@@ -211,6 +254,11 @@ async function upload() {
 </script>
 
 <style scoped>
+.upload-page {
+  display: grid;
+  gap: var(--space-8);
+}
+
 .page-header {
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
@@ -313,6 +361,7 @@ async function upload() {
 
 .inline-form {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
   margin-top: var(--space-2);
   padding: var(--space-3);
@@ -323,6 +372,16 @@ async function upload() {
 
 .inline-form .input {
   flex: 1;
+  min-width: 180px;
+}
+
+.inline-form .form-hint {
+  flex: 1 0 100%;
+  margin: 0;
+}
+
+.inline-form .btn {
+  flex-shrink: 0;
 }
 
 .file-upload {
@@ -367,6 +426,66 @@ async function upload() {
   border: 1px solid oklch(0.85 0.05 145);
   color: var(--color-success);
   font-size: var(--text-sm);
+}
+
+.precheck-panel {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+}
+
+.precheck-header,
+.precheck-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  justify-content: space-between;
+}
+
+.precheck-header strong {
+  color: var(--color-ink);
+}
+
+.precheck-header span,
+.precheck-stats span,
+.precheck-list,
+.precheck-ok {
+  color: var(--color-ink-secondary);
+  font-size: var(--text-xs);
+}
+
+.precheck-stats span {
+  padding: var(--space-1) var(--space-2);
+  border-radius: 999px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  font-weight: 700;
+}
+
+.precheck-warning {
+  display: grid;
+  gap: 3px;
+  padding: var(--space-3);
+  border: 1px solid #ffd4d0;
+  border-radius: 8px;
+  background: #fff4f2;
+  color: #b42318;
+  font-size: var(--text-xs);
+}
+
+.precheck-list {
+  display: grid;
+  gap: var(--space-1);
+  padding-left: var(--space-4);
+}
+
+.precheck-ok {
+  color: var(--color-success);
+  font-weight: 700;
 }
 
 .help-list {

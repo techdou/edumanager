@@ -53,7 +53,8 @@ const navItems = [
   { label: '仪表盘', to: '/admin/dashboard' },
   { label: '用户管理', to: '/admin/users' },
   { label: '分类管理', to: '/admin/categories' },
-  { label: '讲义管理', to: '/admin/lectures' }
+  { label: '讲义管理', to: '/admin/lectures' },
+  { label: '知识文档', to: '/admin/knowledge' }
 ]
 
 const pageTitle = computed(() => {

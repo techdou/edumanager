@@ -1,466 +1,440 @@
 <template>
-  <div class="dashboard">
-    <header class="dashboard-header">
-      <div class="container header-content">
-        <div class="brand">
-          <span class="brand-icon">🛠️</span>
-          <span class="brand-name">管理后台</span>
-        </div>
-        <nav class="nav">
-          <router-link to="/admin/dashboard" class="nav-link">讲义管理</router-link>
-          <router-link to="/admin/upload" class="nav-link nav-link--primary">上传讲义</router-link>
-          <router-link to="/admin/profile" class="nav-link">编辑主页</router-link>
-          <router-link to="/" class="nav-link">学生端</router-link>
-        </nav>
-      </div>
-    </header>
+  <section class="lectures-page">
+    <div class="summary-row">
+      <article>
+        <span>讲义总数</span>
+        <strong>{{ lectures.length }}</strong>
+      </article>
+      <article>
+        <span>章节总数</span>
+        <strong>{{ totalChapters }}</strong>
+      </article>
+      <router-link to="/admin/upload" class="upload-link">上传讲义</router-link>
+    </div>
 
-    <main class="container main-content">
-      <!-- Stats -->
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-value">{{ lectures.length }}</div>
-          <div class="stat-label">总讲义数</div>
-          <div class="stat-trend">{{ lectures.length > 0 ? '+' + lectures.length : '—' }}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value">{{ totalChapters }}</div>
-          <div class="stat-label">总章节</div>
-          <div class="stat-trend">{{ totalChapters > 0 ? '+' + totalChapters : '—' }}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value">{{ categories.length }}</div>
-          <div class="stat-label">分类数</div>
-          <div class="stat-trend">{{ categories.length > 0 ? categories.length + ' 类' : '—' }}</div>
-        </div>
-      </div>
+    <div v-if="error" class="alert">{{ error }}</div>
 
-      <!-- Categories -->
-      <div class="categories-section">
-        <div class="section-header">
-          <h2 class="section-title">分类管理</h2>
-          <div class="inline-add">
-            <input v-model="newCategoryName" placeholder="新分类名称" class="input input-sm" @keyup.enter="addCategory" />
-            <button class="btn btn-primary btn-sm" @click="addCategory">添加分类</button>
-          </div>
-        </div>
-        <div v-if="categories.length === 0" class="empty-state-sm">暂无分类，请在上方添加</div>
-        <div v-else class="category-list">
-          <div v-for="cat in categories" :key="cat.id" class="category-item">
-            <span class="category-name">{{ cat.name }}</span>
-            <button @click="deleteCategory(cat.id)" class="btn btn-ghost btn-sm text-danger">删除</button>
-          </div>
-        </div>
+    <section v-if="unclassifiedLectures.length > 0" class="organize-panel">
+      <div>
+        <strong>{{ unclassifiedLectures.length }} 份讲义未分类</strong>
+        <span>先归类，学生端筛选会更清楚。</span>
       </div>
+      <router-link v-if="categories.length === 0" to="/admin/categories">先创建分类</router-link>
+      <div v-else class="organize-list">
+        <label v-for="lecture in unclassifiedLectures" :key="lecture.id">
+          <span>{{ lecture.title }}</span>
+          <select :value="lecture.category_id || ''" @change="assignCategory(lecture, $event.target.value)">
+            <option value="">选择分类</option>
+            <option v-for="category in categories" :key="category.id" :value="category.id">
+              {{ category.name }}
+            </option>
+          </select>
+        </label>
+      </div>
+    </section>
 
-      <!-- Lecture List -->
-      <div class="lectures-section">
-        <h2 class="section-title">讲义列表</h2>
-        
-        <!-- Loading -->
-        <div v-if="loading" class="skeleton-table">
-          <div class="skeleton" style="height: 48px; margin-bottom: 12px"></div>
-          <div v-for="i in 5" :key="i" class="skeleton-row">
-            <div class="skeleton" style="height: 40px; width: 100%"></div>
-          </div>
-        </div>
-        
-        <!-- Empty -->
-        <div v-else-if="lectures.length === 0" class="empty-state">
-          <div class="empty-state-icon">📭</div>
-          <h3 class="empty-state-title">暂无讲义</h3>
-          <p class="empty-state-desc">上传第一个讲义后，数据将显示在这里</p>
-          <div class="empty-state-action">
-            <router-link to="/admin/upload" class="btn btn-primary">上传讲义</router-link>
-          </div>
-        </div>
-        
-        <!-- Table -->
-        <div v-else class="table-wrapper">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>标题</th>
-                <th>分类</th>
-                <th>章节</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="lecture in lectures" :key="lecture.id">
-                <td class="table-title">
-                  <span class="title-text">{{ lecture.title }}</span>
-                  <span class="title-slug">{{ lecture.slug }}</span>
-                </td>
-                <td>
-                  <span class="pill">{{ lecture.category_name }}</span>
-                </td>
-                <td class="table-num">{{ lecture.chapters?.length || 0 }}</td>
-                <td class="table-actions">
-                  <router-link :to="`/lecture/${lecture.slug}`" class="btn btn-ghost btn-sm">
-                    查看
-                  </router-link>
-                  <button @click="deleteLecture(lecture.id)" class="btn btn-danger btn-sm">
-                    删除
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+    <section class="filter-panel">
+      <input v-model="filters.search" placeholder="搜索标题或 URL 标识" />
+      <select v-model="filters.category">
+        <option value="all">全部分类</option>
+        <option value="uncategorized">未分类</option>
+        <option v-for="category in categories" :key="category.id" :value="String(category.id)">
+          {{ category.name }}
+        </option>
+      </select>
+      <input v-model="filters.from" type="date" />
+      <input v-model="filters.to" type="date" />
+      <button type="button" @click="resetFilters">重置</button>
+    </section>
+
+    <section class="table-panel">
+      <div v-if="loading" class="empty">正在加载讲义...</div>
+      <div v-else-if="lectures.length === 0" class="empty">
+        <p>暂无讲义</p>
+        <router-link to="/admin/upload" class="upload-inline">上传第一个讲义</router-link>
       </div>
-    </main>
-  </div>
+      <div v-else-if="filteredLectures.length === 0" class="empty">没有匹配的讲义</div>
+      <div v-else class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>标题</th>
+              <th>分类</th>
+              <th>章节数</th>
+              <th>创建时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="lecture in filteredLectures" :key="lecture.id">
+              <td class="title-cell">
+                <strong>{{ lecture.title }}</strong>
+                <span>{{ lecture.slug }}</span>
+              </td>
+              <td><span class="tag">{{ lecture.category_name || '未分类' }}</span></td>
+              <td>{{ lecture.chapters?.length || 0 }}</td>
+              <td>{{ formatDate(lecture.created_at) }}</td>
+              <td>
+                <div class="actions">
+                  <router-link :to="`/lecture/${lecture.slug}`">查看</router-link>
+                  <button type="button" class="danger" @click="deleteLecture(lecture)">删除</button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </section>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import axios from 'axios'
 
 const lectures = ref([])
 const categories = ref([])
-const loading = ref(true)
+const loading = ref(false)
+const error = ref('')
+const filters = reactive({
+  search: '',
+  category: 'all',
+  from: '',
+  to: ''
+})
 
 const totalChapters = computed(() => {
-  return lectures.value.reduce((sum, l) => sum + (l.chapters?.length || 0), 0)
+  return lectures.value.reduce((sum, lecture) => sum + (lecture.chapters?.length || 0), 0)
 })
 
-onMounted(async () => {
-  const [lecRes, catRes] = await Promise.all([
-    axios.get('/api/lectures'),
-    axios.get('/api/categories')
-  ])
-  lectures.value = lecRes.data
-  categories.value = catRes.data
-  loading.value = false
+const unclassifiedLectures = computed(() => {
+  return lectures.value.filter(lecture => !lecture.category_name)
 })
 
-const newCategoryName = ref('')
+const filteredLectures = computed(() => {
+  const search = filters.search.trim().toLowerCase()
+  const fromTime = filters.from ? new Date(`${filters.from}T00:00:00`).getTime() : null
+  const toTime = filters.to ? new Date(`${filters.to}T23:59:59`).getTime() : null
 
-async function addCategory() {
-  if (!newCategoryName.value.trim()) return
+  return lectures.value.filter(lecture => {
+    const created = new Date(String(lecture.created_at).replace(' ', 'T')).getTime()
+    const matchesSearch = !search
+      || lecture.title.toLowerCase().includes(search)
+      || lecture.slug.toLowerCase().includes(search)
+    const matchesCategory = filters.category === 'all'
+      || (filters.category === 'uncategorized' && !lecture.category_name)
+      || String(lecture.category_id) === filters.category
+    const matchesFrom = !fromTime || created >= fromTime
+    const matchesTo = !toTime || created <= toTime
+    return matchesSearch && matchesCategory && matchesFrom && matchesTo
+  })
+})
+
+onMounted(fetchLectures)
+
+async function fetchLectures() {
+  loading.value = true
+  error.value = ''
   try {
-    const res = await axios.post('/api/categories', { name: newCategoryName.value.trim() })
-    categories.value.push(res.data)
-    newCategoryName.value = ''
+    const [lectureRes, categoryRes] = await Promise.all([
+      axios.get('/api/lectures'),
+      axios.get('/api/categories')
+    ])
+    lectures.value = lectureRes.data
+    categories.value = categoryRes.data
   } catch (e) {
-    alert('创建失败：' + (e.response?.data?.error || '未知错误'))
+    error.value = e.response?.data?.error || '讲义加载失败'
+  } finally {
+    loading.value = false
   }
 }
 
-async function deleteCategory(id) {
+async function deleteLecture(lecture) {
+  if (!confirm(`确定删除讲义「${lecture.title}」吗？`)) return
+
   try {
     const token = localStorage.getItem('adminToken')
-    await axios.delete(`/api/categories/${id}`, {
+    await axios.delete(`/api/lectures/${lecture.id}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {}
     })
-    categories.value = categories.value.filter(c => c.id !== id)
+    lectures.value = lectures.value.filter(item => item.id !== lecture.id)
   } catch (e) {
-    alert(e.response?.data?.error || '删除失败')
+    error.value = e.response?.data?.error || '删除失败'
   }
 }
 
-async function deleteLecture(id) {
-  if (!confirm('删除后无法恢复，确定继续？')) return
-  
+async function assignCategory(lecture, categoryId) {
+  if (!categoryId) return
+  error.value = ''
   try {
     const token = localStorage.getItem('adminToken')
-    await axios.delete(`/api/lectures/${id}`, {
+    const res = await axios.put(`/api/lectures/${lecture.id}/category`, { categoryId: Number(categoryId) }, {
       headers: token ? { Authorization: `Bearer ${token}` } : {}
     })
-    lectures.value = lectures.value.filter(l => l.id !== id)
+    lectures.value = lectures.value.map(item => item.id === lecture.id ? res.data : item)
   } catch (e) {
-    alert('删除失败：' + (e.response?.data?.error || '未知错误'))
+    error.value = e.response?.data?.error || '分类更新失败'
   }
+}
+
+function resetFilters() {
+  filters.search = ''
+  filters.category = 'all'
+  filters.from = ''
+  filters.to = ''
+}
+
+function formatDate(value) {
+  if (!value) return '-'
+  return new Date(String(value).replace(' ', 'T')).toLocaleString('zh-CN', { hour12: false })
 }
 </script>
 
 <style scoped>
-.dashboard-header {
-  background: var(--color-surface);
-  border-bottom: 1px solid var(--color-border);
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  backdrop-filter: blur(12px);
-  background: oklch(1 0 0 / 0.85);
-}
-
-.header-content {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding-top: var(--space-4);
-  padding-bottom: var(--space-4);
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.brand-icon {
-  font-size: var(--text-xl);
-}
-
-.brand-name {
-  font-family: var(--font-display);
-  font-size: var(--text-lg);
-  font-weight: 700;
-  color: var(--color-ink);
-}
-
-.nav {
-  display: flex;
-  gap: var(--space-2);
-}
-
-.nav-link {
-  padding: var(--space-2) var(--space-4);
-  border-radius: var(--radius-md);
-  font-size: var(--text-sm);
-  font-weight: 500;
-  color: var(--color-ink-secondary);
-  text-decoration: none;
-  transition: all var(--duration-fast) var(--ease-out-expo);
-}
-
-.nav-link:hover {
-  background: var(--color-bg);
-  color: var(--color-ink);
-}
-
-.nav-link--primary {
-  background: var(--color-primary);
-  color: white;
-}
-
-.nav-link--primary:hover {
-  background: var(--color-primary-hover);
-  color: white;
-}
-
-.main-content {
-  padding-top: var(--space-8);
-  padding-bottom: var(--space-16);
-}
-
-.stats-grid {
+.lectures-page {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: var(--space-6);
-  margin-bottom: var(--space-8);
+  gap: 18px;
 }
 
-.stat-card {
-  background: var(--color-surface);
-  padding: var(--space-6);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--color-border);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
+.summary-row {
+  display: grid;
+  grid-template-columns: 180px 180px auto;
+  gap: 14px;
+  align-items: stretch;
 }
 
-.stat-value {
-  font-family: var(--font-display);
-  font-size: var(--text-4xl);
-  font-weight: 700;
-  color: var(--color-primary);
+.summary-row article,
+.upload-link,
+.table-panel {
+  border: 1px solid #e6eaf0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.summary-row article {
+  display: grid;
+  gap: 10px;
+  padding: 18px;
+}
+
+.summary-row span {
+  color: #6d7788;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.summary-row strong {
+  color: #172033;
+  font-size: 30px;
   line-height: 1;
 }
 
-.stat-label {
-  font-size: var(--text-sm);
-  color: var(--color-ink-secondary);
-  font-weight: 600;
+.upload-link,
+.upload-inline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 18px;
+  background: #2f6fed;
+  color: white;
+  font-weight: 800;
+  text-decoration: none;
 }
 
-.stat-trend {
-  font-size: var(--text-xs);
-  color: var(--color-ink-tertiary);
+.upload-inline {
+  margin-top: 12px;
+  border-radius: 8px;
 }
 
-.section-title {
-  font-family: var(--font-display);
-  font-size: var(--text-xl);
-  font-weight: 600;
-  color: var(--color-ink);
-  margin-bottom: var(--space-6);
+.alert {
+  padding: 12px 14px;
+  border: 1px solid #ffd4d0;
+  border-radius: 8px;
+  background: #fff4f2;
+  color: #b42318;
+  font-weight: 650;
 }
 
-.skeleton-table {
-  padding: var(--space-4);
+.organize-panel,
+.filter-panel {
+  border: 1px solid #e6eaf0;
+  border-radius: 8px;
+  background: #ffffff;
 }
 
-.skeleton-row {
-  margin-bottom: var(--space-2);
+.organize-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
 }
 
-.table-wrapper {
-  background: var(--color-surface);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--color-border);
+.organize-panel strong,
+.organize-panel span {
+  display: block;
+}
+
+.organize-panel strong {
+  color: #172033;
+}
+
+.organize-panel span {
+  margin-top: 3px;
+  color: #6d7788;
+  font-size: 13px;
+}
+
+.organize-panel a {
+  justify-self: start;
+  color: #1f5fce;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.organize-list {
+  display: grid;
+  gap: 10px;
+}
+
+.organize-list label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 10px;
+  align-items: center;
+}
+
+.organize-list label span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filter-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 180px 150px 150px auto;
+  gap: 10px;
+  padding: 14px;
+}
+
+.filter-panel input,
+.filter-panel select,
+.filter-panel button,
+.organize-list select {
+  min-height: 40px;
+  padding: 8px 11px;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #172033;
+  font: inherit;
+  font-size: 14px;
+}
+
+.filter-panel button {
+  color: #4d596d;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.table-panel {
   overflow: hidden;
 }
 
-.data-table {
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
   width: 100%;
+  min-width: 800px;
   border-collapse: collapse;
 }
 
-.data-table th {
+th,
+td {
+  padding: 14px 16px;
+  border-bottom: 1px solid #eef1f5;
+  color: #4d596d;
+  font-size: 14px;
   text-align: left;
-  padding: var(--space-4) var(--space-5);
-  font-size: var(--text-xs);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--color-ink-tertiary);
-  background: var(--color-bg);
-  border-bottom: 1px solid var(--color-border);
 }
 
-.data-table td {
-  padding: var(--space-4) var(--space-5);
-  border-bottom: 1px solid var(--color-border);
+th {
+  background: #f8fafc;
+  color: #6d7788;
+  font-size: 12px;
+  font-weight: 800;
 }
 
-.data-table tr:last-child td {
-  border-bottom: none;
+tbody tr:last-child td {
+  border-bottom: 0;
 }
 
-.data-table tr:hover td {
-  background: oklch(0.98 0.01 260);
+.title-cell {
+  display: grid;
+  gap: 3px;
 }
 
-.table-title {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
+.title-cell strong {
+  color: #172033;
 }
 
-.title-text {
-  font-weight: 600;
-  color: var(--color-ink);
+.title-cell span {
+  color: #7a8494;
+  font-size: 12px;
 }
 
-.title-slug {
-  font-size: var(--text-xs);
-  font-family: var(--font-mono);
-  color: var(--color-ink-tertiary);
-}
-
-.table-num {
-  font-family: var(--font-mono);
-  font-weight: 600;
-  color: var(--color-ink-secondary);
-}
-
-.table-actions {
-  display: flex;
-  gap: var(--space-2);
-}
-
-.btn-sm {
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--text-xs);
-}
-
-.categories-section {
-  margin-bottom: var(--space-8);
-}
-
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  margin-bottom: var(--space-4);
-}
-
-.inline-add {
-  display: flex;
-  gap: var(--space-2);
-}
-
-.input-sm {
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--text-sm);
-  width: 200px;
-}
-
-.text-danger {
-  color: var(--color-danger, oklch(0.6 0.2 25));
-}
-
-.empty-state-sm {
-  padding: var(--space-4);
-  text-align: center;
-  color: var(--color-ink-tertiary);
-  font-size: var(--text-sm);
-}
-
-.category-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.category-item {
+.tag {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  min-height: 25px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: #edf2f7;
+  color: #4d596d;
+  font-size: 12px;
+  font-weight: 800;
 }
 
-.category-name {
-  font-size: var(--text-sm);
-  font-weight: 500;
-  color: var(--color-ink-secondary);
+.actions {
+  display: flex;
+  gap: 8px;
 }
 
-@media (max-width: 768px) {
-  .stats-grid {
+.actions a,
+.actions button {
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #4d596d;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 750;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.actions .danger {
+  color: #b42318;
+}
+
+.empty {
+  padding: 34px;
+  color: #7a8494;
+  text-align: center;
+}
+
+@media (max-width: 720px) {
+  .summary-row {
     grid-template-columns: 1fr;
   }
-  
-  .header-content {
-    flex-direction: column;
-    gap: var(--space-3);
-  }
-  
-  .data-table {
-    display: block;
-  }
-  
-  .data-table thead {
-    display: none;
-  }
-  
-  .data-table tbody {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-    padding: var(--space-4);
-  }
-  
-  .data-table tr {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    padding: var(--space-4);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-  }
-  
-  .data-table td {
-    padding: 0;
-    border: none;
+
+  .filter-panel,
+  .organize-list label {
+    grid-template-columns: 1fr;
   }
 }
 </style>

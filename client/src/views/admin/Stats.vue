@@ -322,6 +322,10 @@ function statusText(status) {
 .user-row strong {
   color: #172033;
   font-weight: 700;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mini-row small,
@@ -329,6 +333,7 @@ function statusText(status) {
 .user-row time {
   color: #7a8494;
   font-size: 13px;
+  white-space: nowrap;
 }
 
 .user-list {

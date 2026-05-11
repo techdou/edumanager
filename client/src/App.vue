@@ -110,7 +110,7 @@ body {
   font-family: var(--font-sans);
   font-size: var(--text-sm);
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
   cursor: pointer;
   transition: all var(--duration-fast) var(--ease-out-expo);
   position: relative;
@@ -246,7 +246,7 @@ body {
   border-radius: 999px;
   font-size: var(--text-xs);
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
   background: var(--color-bg);
   color: var(--color-ink-secondary);
   border: 1px solid var(--color-border);

@@ -7,6 +7,7 @@ const authRoutes = require('./routes/auth');
 const lectureRoutes = require('./routes/lecture');
 const categoryRoutes = require('./routes/category');
 const adminRoutes = require('./routes/admin');
+const knowledgeRoutes = require('./routes/knowledge');
 
 const app = express();
 const PORT = 3142;
@@ -23,6 +24,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/lectures', lectureRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/knowledge', knowledgeRoutes);
 
 app.use('/lectures', express.static(path.join(__dirname, '../lectures')));
 

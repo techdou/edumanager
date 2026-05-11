@@ -9,6 +9,10 @@
           <span>返回列表</span>
         </router-link>
         <h1 class="lecture-title">{{ lecture?.title || '讲义浏览' }}</h1>
+        <div v-if="currentPath" class="read-progress">
+          <span>{{ readProgress }}%</span>
+          <div><i :style="{ width: `${readProgress}%` }"></i></div>
+        </div>
       </div>
     </header>
 
@@ -74,7 +78,7 @@
           <div v-for="mod in toc.modules" :key="mod.id" class="toc-module">
             <a
               :href="mod.anchor"
-              :class="['toc-module-title', { active: activeAnchor === mod.anchor }]"
+              :class="['toc-module-title', { active: isModuleActive(mod) }]"
               @click.prevent="scrollToAnchor(mod.anchor)"
             >
               <span class="toc-module-text">{{ mod.title }}</span>
@@ -138,16 +142,15 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import axios from 'axios'
 
 const route = useRoute()
 const slug = computed(() => route.params.slug)
-const currentChapter = computed(() => route.params.chapter)
+const currentChapter = computed(() => route.params.chapter || chapters.value[0]?.slug || '')
 const sidebarCollapsed = ref(false)
 const isMobile = ref(window.innerWidth <= 768)
-window.addEventListener('resize', () => { isMobile.value = window.innerWidth <= 768 })
 const loading = ref(true)
 const viewerFrame = ref(null)
 
@@ -155,17 +158,68 @@ const lecture = ref(null)
 const chapters = ref([])
 const toc = ref(null)
 const activeAnchor = ref('')
+const readProgress = ref(0)
 const showToc = computed(() => !!toc.value && toc.value.modules.length > 0)
+const recentKey = 'edumanager:recentLectures'
 
 const currentPath = computed(() => {
   if (!lecture.value || !currentChapter.value) return null
-  return `${slug.value}/${currentChapter.value}`
+  const chapter = chapters.value.find(item => item.slug === currentChapter.value)
+  return chapter?.path || null
 })
+
+function syncViewportMode() {
+  isMobile.value = window.innerWidth <= 768
+  if (isMobile.value) sidebarCollapsed.value = true
+}
+
+function handleTocMessage(e) {
+  if (e.data?.type === 'toc-active') {
+    activeAnchor.value = e.data.anchor
+  }
+  if (e.data?.type === 'reading-progress') {
+    readProgress.value = Math.max(0, Math.min(100, Math.round(Number(e.data.progress) || 0)))
+    saveRecentLecture()
+  }
+}
+
+function currentChapterMeta() {
+  return chapters.value.find(item => item.slug === currentChapter.value)
+}
+
+function saveRecentLecture() {
+  if (!lecture.value || !currentChapter.value) return
+  const chapter = currentChapterMeta()
+  const item = {
+    lectureSlug: slug.value,
+    chapterSlug: currentChapter.value,
+    lectureTitle: lecture.value.title,
+    chapterTitle: chapter?.title || lecture.value.title,
+    progress: readProgress.value,
+    updatedAt: Date.now()
+  }
+  try {
+    const existing = JSON.parse(localStorage.getItem(recentKey) || '[]')
+    const next = [
+      item,
+      ...existing.filter(entry => `${entry.lectureSlug}/${entry.chapterSlug}` !== `${item.lectureSlug}/${item.chapterSlug}`)
+    ].slice(0, 6)
+    localStorage.setItem(recentKey, JSON.stringify(next))
+  } catch {
+    localStorage.setItem(recentKey, JSON.stringify([item]))
+  }
+}
+
+function isModuleActive(module) {
+  if (activeAnchor.value === module.anchor) return true
+  return module.sections?.some(section => section.anchor === activeAnchor.value)
+}
 
 async function loadLecture() {
   loading.value = true
   toc.value = null
   activeAnchor.value = ''
+  readProgress.value = 0
   
   const res = await axios.get('/api/lectures')
   lecture.value = res.data.find(l => l.slug === slug.value)
@@ -174,8 +228,7 @@ async function loadLecture() {
   // Try to load TOC for current chapter
   if (currentPath.value) {
     try {
-      const [lSlug, cSlug] = currentPath.value.split('/')
-      const tocRes = await axios.get(`/api/lectures/toc/${lSlug}/${cSlug}`)
+      const tocRes = await axios.get(`/api/lectures/toc/${slug.value}/${currentChapter.value}`)
       toc.value = tocRes.data
     } catch {
       toc.value = null
@@ -183,6 +236,7 @@ async function loadLecture() {
   }
   
   loading.value = false
+  saveRecentLecture()
 }
 
 function onIframeLoad() {
@@ -200,8 +254,9 @@ function onIframeLoad() {
         let ticking = false;
         const headings = document.querySelectorAll('h1[id], h2[id], h3[id], h4[id]');
         
-        function sendActiveHeading() {
+        function sendReadingState() {
           const scrollTop = window.scrollY || document.documentElement.scrollTop;
+          const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
           let active = '';
           
           for (let i = headings.length - 1; i >= 0; i--) {
@@ -214,20 +269,21 @@ function onIframeLoad() {
           }
           
           window.parent.postMessage({ type: 'toc-active', anchor: active }, '*');
+          window.parent.postMessage({ type: 'reading-progress', progress: Math.min(100, (scrollTop / maxScroll) * 100) }, '*');
         }
         
         window.addEventListener('scroll', function() {
           if (!ticking) {
             ticking = true;
             requestAnimationFrame(function() {
-              sendActiveHeading();
+              sendReadingState();
               ticking = false;
             });
           }
         });
         
         // Initial call
-        sendActiveHeading();
+        sendReadingState();
       })();
     `
     doc.head.appendChild(script)
@@ -245,23 +301,28 @@ function scrollToAnchor(anchor) {
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'start' })
       activeAnchor.value = anchor
+      if (isMobile.value) sidebarCollapsed.value = true
     }
   } catch {
     // fallback: set iframe src with hash
     viewerFrame.value.src = `/lectures/${currentPath.value}/index.html${anchor}`
+    if (isMobile.value) sidebarCollapsed.value = true
   }
 }
 
 // Listen for scroll messages from iframe
 onMounted(() => {
-  window.addEventListener('message', (e) => {
-    if (e.data?.type === 'toc-active') {
-      activeAnchor.value = e.data.anchor
-    }
-  })
+  syncViewportMode()
+  sidebarCollapsed.value = isMobile.value
+  window.addEventListener('resize', syncViewportMode)
+  window.addEventListener('message', handleTocMessage)
+  loadLecture()
 })
 
-onMounted(() => loadLecture())
+onUnmounted(() => {
+  window.removeEventListener('resize', syncViewportMode)
+  window.removeEventListener('message', handleTocMessage)
+})
 
 watch(slug, () => loadLecture())
 watch(currentChapter, () => loadLecture())
@@ -331,6 +392,31 @@ watch(currentChapter, () => loadLecture())
   white-space: nowrap;
 }
 
+.read-progress {
+  margin-left: auto;
+  min-width: 140px;
+  display: grid;
+  gap: 5px;
+  color: var(--color-ink-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-align: right;
+}
+
+.read-progress div {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-border);
+}
+
+.read-progress i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-primary);
+}
+
 .lecture-body {
   display: flex;
   flex: 1;
@@ -367,7 +453,7 @@ watch(currentChapter, () => loadLecture())
   width: 32px;
   height: 64px;
   border-radius: 0 var(--radius-md) var(--radius-md) 0;
-  border: 1px solid var(--color-ink-divider);
+  border: 1px solid var(--color-border);
   border-left: none;
   background: var(--color-surface);
   color: var(--color-ink-tertiary);
@@ -389,6 +475,10 @@ watch(currentChapter, () => loadLecture())
   border-color: var(--color-ink-secondary);
 }
 
+.mobile-sidebar-btn {
+  display: none;
+}
+
 .sidebar-float-toggle {
   display: none;
   position: absolute;
@@ -398,7 +488,7 @@ watch(currentChapter, () => loadLecture())
   width: 28px;
   height: 28px;
   border-radius: var(--radius-md);
-  border: 1px solid var(--color-ink-divider);
+  border: 1px solid var(--color-border);
   background: var(--color-surface);
   color: var(--color-ink-tertiary);
   cursor: pointer;
@@ -685,6 +775,13 @@ watch(currentChapter, () => loadLecture())
 
   .lecture-title {
     font-size: var(--text-base);
+  }
+
+  .read-progress {
+    grid-column: 1 / -1;
+    margin-left: 0;
+    min-width: 0;
+    text-align: left;
   }
 }
 </style>
