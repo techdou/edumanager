@@ -129,7 +129,14 @@
           class="viewer-frame"
           sandbox="allow-scripts allow-same-origin"
           @load="onIframeLoad"
+          @error="iframeError = true"
         />
+        
+        <div v-else-if="iframeError" class="empty-state">
+          <div class="empty-state-icon">📭</div>
+          <h3 class="empty-state-title">讲义内容暂未上传</h3>
+          <p class="empty-state-desc">该章节的内容尚未准备好，请联系管理员上传讲义文件</p>
+        </div>
         
         <div v-else class="empty-state">
           <div class="empty-state-icon">📖</div>
@@ -153,6 +160,7 @@ const sidebarCollapsed = ref(false)
 const isMobile = ref(window.innerWidth <= 768)
 const loading = ref(true)
 const viewerFrame = ref(null)
+const iframeError = ref(false)
 
 const lecture = ref(null)
 const chapters = ref([])
@@ -220,6 +228,7 @@ async function loadLecture() {
   toc.value = null
   activeAnchor.value = ''
   readProgress.value = 0
+  iframeError.value = false
   
   const res = await axios.get('/api/lectures')
   lecture.value = res.data.find(l => l.slug === slug.value)
@@ -240,6 +249,20 @@ async function loadLecture() {
 }
 
 function onIframeLoad() {
+  // 检测 iframe 是否加载了 404 或非预期内容
+  if (viewerFrame.value) {
+    try {
+      const doc = viewerFrame.value.contentDocument
+      // 如果内容是 SPA index.html（包含 #app），说明讲义文件不存在
+      if (doc && doc.querySelector('#app') && !doc.querySelector('.lecture-content, .markdown-body, article, main')) {
+        iframeError.value = true
+        return
+      }
+    } catch {
+      // cross-origin，无法检测，不处理
+    }
+  }
+  
   if (!showToc.value || !viewerFrame.value) return
   
   const iframe = viewerFrame.value

@@ -26,7 +26,7 @@ app.use('/api/categories', categoryRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/knowledge', knowledgeRoutes);
 
-app.use('/lectures', express.static(path.join(__dirname, '../lectures')));
+app.use('/lectures', express.static(path.join(__dirname, '../lectures'), { fallthrough: false }));
 
 const distPath = path.join(__dirname, '../client/dist');
 app.use(express.static(distPath, {
