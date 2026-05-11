@@ -23,7 +23,67 @@
       </div>
     </header>
 
-    <main class="container main-content">
+    <main class="main-content">
+      <!-- Hero Section -->
+      <section class="hero">
+        <div class="hero-glow"></div>
+        <div class="container hero-inner">
+          <div class="hero-text">
+            <p class="hero-eyebrow">🎓 智慧教育平台</p>
+            <h1 class="hero-title">
+              让教学资源管理<br><span class="hero-gradient">更高效、更有序</span>
+            </h1>
+            <p class="hero-desc">
+              EduManager 为教育机构提供一站式讲义管理解决方案。上传、分类、分发课程资料，学生随时随地在线学习。
+            </p>
+            <div class="hero-actions">
+              <router-link v-if="!isLoggedIn" to="/register" class="hero-btn hero-btn--primary">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
+                开始使用
+              </router-link>
+              <router-link v-else to="/" class="hero-btn hero-btn--primary">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+                进入学习
+              </router-link>
+              <router-link to="/admin" class="hero-btn hero-btn--ghost">
+                管理后台 →
+              </router-link>
+            </div>
+          </div>
+          <div class="hero-bento">
+            <div class="bento-card bento-card--accent">
+              <div class="bento-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+              </div>
+              <h3>讲义管理</h3>
+              <p>上传 ZIP 讲义包，自动解析章节目录，支持分类管理与封面设置</p>
+            </div>
+            <div class="bento-card">
+              <div class="bento-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+              </div>
+              <h3>在线学习</h3>
+              <p>学生端在线浏览讲义，支持目录导航、阅读进度跟踪与最近打开</p>
+            </div>
+            <div class="bento-card">
+              <div class="bento-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+              </div>
+              <h3>知识库</h3>
+              <p>整合飞书知识文档，Markdown/PDF 在线预览，打造统一学习入口</p>
+            </div>
+            <div class="bento-card">
+              <div class="bento-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              </div>
+              <h3>用户管理</h3>
+              <p>管理员与学员角色分离，支持批量创建、状态管理与数据统计</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="container">
       <section class="library-header">
         <div>
           <p class="eyebrow">课程讲义</p>
@@ -196,6 +256,8 @@
           </div>
         </div>
       </div>
+      </section>
+      </div>
     </main>
   </div>
 </template>
@@ -305,6 +367,199 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* ====== Hero Section ====== */
+.hero {
+  position: relative;
+  overflow: hidden;
+  padding: var(--space-16) 0 var(--space-12);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.hero-glow {
+  position: absolute;
+  top: -40%;
+  right: -10%;
+  width: 600px;
+  height: 600px;
+  background: radial-gradient(circle, oklch(0.6 0.18 250 / 0.08) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.hero::before {
+  content: '';
+  position: absolute;
+  bottom: -60%;
+  left: -5%;
+  width: 400px;
+  height: 400px;
+  background: radial-gradient(circle, oklch(0.6 0.15 35 / 0.06) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.hero-inner {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-12);
+  align-items: center;
+}
+
+.hero-text {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.hero-eyebrow {
+  color: var(--color-brand);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.hero-title {
+  font-family: var(--font-display);
+  font-size: clamp(32px, 4vw, 48px);
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+  color: var(--color-ink);
+}
+
+.hero-gradient {
+  background: linear-gradient(135deg, oklch(0.55 0.18 250), oklch(0.55 0.15 35));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.hero-desc {
+  font-size: var(--text-base);
+  line-height: 1.7;
+  color: var(--color-ink-secondary);
+  max-width: 480px;
+}
+
+.hero-actions {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.hero-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-6);
+  border-radius: var(--radius-md);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-decoration: none;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+
+.hero-btn--primary {
+  background: var(--color-primary);
+  color: white;
+  box-shadow: 0 4px 16px oklch(0.55 0.18 250 / 0.25);
+}
+
+.hero-btn--primary:hover {
+  background: var(--color-primary-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px oklch(0.55 0.18 250 / 0.3);
+  color: white;
+}
+
+.hero-btn--ghost {
+  color: var(--color-ink-secondary);
+  padding: var(--space-3) var(--space-4);
+}
+
+.hero-btn--ghost:hover {
+  color: var(--color-primary);
+}
+
+/* Bento Grid */
+.hero-bento {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+}
+
+.bento-card {
+  padding: var(--space-5);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  transition: all var(--duration-normal) var(--ease-out-expo);
+}
+
+.bento-card:hover {
+  border-color: oklch(0.8 0.04 250);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+
+.bento-card--accent {
+  background: linear-gradient(135deg, oklch(0.95 0.04 250), oklch(0.97 0.02 250));
+  border-color: oklch(0.85 0.06 250);
+}
+
+.bento-icon {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-primary);
+  margin-bottom: var(--space-4);
+  box-shadow: var(--shadow-sm);
+}
+
+.bento-card--accent .bento-icon {
+  background: var(--color-primary);
+  color: white;
+}
+
+.bento-card h3 {
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--color-ink);
+  margin-bottom: var(--space-2);
+}
+
+.bento-card p {
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--color-ink-tertiary);
+}
+
+@media (max-width: 900px) {
+  .hero-inner {
+    grid-template-columns: 1fr;
+    gap: var(--space-8);
+  }
+
+  .hero-bento {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .hero {
+    padding: var(--space-10) 0 var(--space-8);
+  }
+
+  .hero-bento {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ====== Original Styles ====== */
 .main-header {
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
