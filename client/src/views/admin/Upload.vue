@@ -41,17 +41,48 @@
           </div>
 
           <div class="form-group">
-            <label class="form-label">ZIP 文件</label>
+            <label class="form-label">讲义文件</label>
             <div class="file-upload">
-              <input type="file" @change="handleFile" accept=".zip" required class="file-input" />
+              <input type="file" @change="handleFile" accept=".zip,.html,.htm,text/html,application/zip" required class="file-input" />
               <div class="file-upload-label">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
                 </svg>
                 <span v-if="file">{{ file.name }}</span>
-                <span v-else>点击选择 ZIP 文件</span>
+                <span v-else>点击选择 ZIP 或单个 HTML 文件</span>
               </div>
             </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">页面布局</label>
+            <div class="layout-options">
+              <label :class="['layout-option', { active: layoutMode === 'system' }]">
+                <input v-model="layoutMode" type="radio" value="system" />
+                <span>
+                  <strong>系统阅读布局</strong>
+                  <small>保留顶部、目录、进度等学习工作台能力</small>
+                </span>
+              </label>
+              <label :class="['layout-option', { active: layoutMode === 'native' }]">
+                <input v-model="layoutMode" type="radio" value="native" />
+                <span>
+                  <strong>使用 HTML 自带布局</strong>
+                  <small>适合自带 CSS、导航和交互的完整网页讲义</small>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">公开展示</label>
+            <label class="layout-option" style="padding: 12px 16px;">
+              <input v-model="isPublic" type="checkbox" />
+              <span>
+                <strong>在首页公开显示</strong>
+                <small>开启后未登录用户也能看到此讲义</small>
+              </span>
+            </label>
           </div>
 
           <div class="form-group">
@@ -72,7 +103,7 @@
 
           <section v-if="precheckLoading || zipCheck" class="precheck-panel">
             <div class="precheck-header">
-              <strong>ZIP 结构预检</strong>
+              <strong>讲义结构预检</strong>
               <span v-if="precheckLoading">检查中...</span>
               <span v-else-if="zipCheck">{{ zipCheck.mode === 'multi-chapter' ? '多章节' : '单页讲义' }}</span>
             </div>
@@ -111,13 +142,14 @@
 
         <!-- Help Section -->
         <div class="help-section card">
-          <h2 class="form-title">ZIP 结构要求</h2>
+          <h2 class="form-title">讲义文件建议</h2>
           
           <ul class="help-list">
             <li>URL 标识作为讲义一级路径</li>
-            <li>内部目录作为章节路径，单个 HTML 也可直接放在根目录</li>
-            <li>每个章节目录必须包含 index.html</li>
-            <li>支持 images 等资源文件夹</li>
+            <li>推荐每章使用 index.html，但 lesson.html、main.htm 等自定义入口也支持</li>
+            <li>可以直接上传单个 HTML，也可以上传包含图片、CSS、JS 的 ZIP</li>
+            <li>ZIP 内多个目录会自动识别为多章节；目录内优先使用 index.html，否则使用可用 HTML</li>
+            <li>如果 HTML 自带完整页面布局，可选择“使用 HTML 自带布局”</li>
           </ul>
           
           <div class="code-block">
@@ -129,7 +161,7 @@ ai_learning.zip
 ├── day2_basics/
 │   ├── index.html
 └── day3_advanced/
-    └── index.html
+    └── lesson.html
             </pre>
           </div>
         </div>
@@ -148,6 +180,8 @@ const slug = ref('')
 const categoryId = ref(null)
 const file = ref(null)
 const cover = ref(null)
+const layoutMode = ref('system')
+const isPublic = ref(false)
 const categories = ref([])
 const uploading = ref(false)
 const precheckLoading = ref(false)
@@ -170,8 +204,8 @@ async function handleFile(e) {
   zipCheck.value = null
 
   if (!file.value) return
-  if (!file.value.name.toLowerCase().endsWith('.zip')) {
-    error.value = '仅支持 ZIP 文件'
+  if (!/\.(zip|html?)$/i.test(file.value.name)) {
+    error.value = '仅支持 ZIP 或 HTML 文件'
     return
   }
 
@@ -185,7 +219,7 @@ async function handleFile(e) {
     })
     zipCheck.value = res.data
   } catch (e) {
-    error.value = e.response?.data?.error || 'ZIP 结构预检失败'
+    error.value = e.response?.data?.error || '讲义结构预检失败'
   } finally {
     precheckLoading.value = false
   }
@@ -223,7 +257,7 @@ async function createCategory() {
 
 async function upload() {
   if (!file.value) {
-    error.value = '请选择 ZIP 文件'
+    error.value = '请选择 ZIP 或 HTML 文件'
     return
   }
   if (!title.value) {
@@ -254,6 +288,8 @@ async function upload() {
   formData.append('title', title.value)
   formData.append('slug', slug.value)
   formData.append('categoryId', categoryId.value)
+  formData.append('layoutMode', layoutMode.value)
+  formData.append('isPublic', isPublic.value ? '1' : '0')
   if (cover.value) formData.append('cover', cover.value)
 
   try {
@@ -443,6 +479,50 @@ async function upload() {
   border-color: var(--color-primary);
   color: var(--color-primary);
   background: var(--color-primary-subtle);
+}
+
+.layout-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.layout-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  cursor: pointer;
+}
+
+.layout-option.active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-subtle);
+}
+
+.layout-option input {
+  margin-top: 3px;
+}
+
+.layout-option strong,
+.layout-option small {
+  display: block;
+}
+
+.layout-option strong {
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+}
+
+.layout-option small {
+  margin-top: var(--space-1);
+  color: var(--color-ink-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
 }
 
 .success-alert {

@@ -12,7 +12,8 @@
         </div>
         <nav class="nav">
           <template v-if="isLoggedIn">
-            <span class="nav-link nav-link--user">{{ studentUsername }}</span>
+            <router-link to="/learn" class="nav-link">学习中心</router-link>
+            <router-link to="/profile" class="nav-link nav-link--user">{{ studentUsername }}</router-link>
             <button class="nav-link" @click="logout">退出</button>
           </template>
           <template v-else>
@@ -51,7 +52,7 @@
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
                 开始使用
               </router-link>
-              <router-link v-else to="/" class="hero-btn hero-btn--primary">
+              <router-link v-else to="/learn" class="hero-btn hero-btn--primary">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
                 进入学习
               </router-link>
@@ -118,7 +119,8 @@
       <section class="library-header">
         <div>
           <p class="eyebrow">课程讲义</p>
-          <h1>全部学习资料</h1>
+          <h1 v-if="!isLoggedIn">公开精选</h1>
+          <h1 v-else>全部学习资料</h1>
         </div>
         <div class="library-meta">
           <strong>{{ lectures.length }}</strong>
@@ -251,7 +253,7 @@
       <!-- Lecture Grid -->
       <div v-else class="lecture-grid">
         <div v-for="lecture in filteredLectures" :key="lecture.id" class="lecture-card card">
-          <div v-if="lecture.cover_url || firstChapterPath(lecture)" class="resource-preview lecture-preview">
+          <div v-if="lecture.cover_url || firstChapterSrc(lecture)" class="resource-preview lecture-preview">
             <img
               v-if="lecture.cover_url"
               class="cover-image"
@@ -261,7 +263,7 @@
             />
             <iframe
               v-else
-              :src="`/lectures/${firstChapterPath(lecture)}/index.html`"
+              :src="firstChapterSrc(lecture)"
               :title="`${lecture.title} 预览`"
               loading="lazy"
               sandbox="allow-scripts allow-same-origin"
@@ -372,8 +374,10 @@ function formatRecentTime(value) {
   return `${Math.floor(hours / 24)} 天前`
 }
 
-function firstChapterPath(lecture) {
-  return lecture.chapters?.[0]?.path || ''
+function firstChapterSrc(lecture) {
+  const chapter = lecture.chapters?.[0]
+  if (!chapter?.path) return ''
+  return `/lectures/${chapter.path}/${chapter.entry_file || 'index.html'}`
 }
 
 function previewHint(doc) {
@@ -398,9 +402,11 @@ const filteredLectures = computed(() => {
 const totalChapters = computed(() => lectures.value.reduce((s, l) => s + (l.chapters?.length || 0), 0))
 
 onMounted(async () => {
+  const token = localStorage.getItem('token')
+  const headers = token ? { Authorization: `Bearer ${token}` } : {}
   const [catRes, lecRes, knowledgeRes] = await Promise.all([
     axios.get('/api/categories'),
-    axios.get('/api/lectures'),
+    axios.get('/api/lectures', { params: token ? { all: 1 } : {}, headers }),
     axios.get('/api/knowledge', { params: { featured: 1 } })
   ])
   categories.value = catRes.data

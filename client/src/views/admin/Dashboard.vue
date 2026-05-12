@@ -61,6 +61,7 @@
               <th>标题</th>
               <th>分类</th>
               <th>章节数</th>
+              <th>公开</th>
               <th>创建时间</th>
               <th>操作</th>
             </tr>
@@ -73,6 +74,12 @@
               </td>
               <td><span class="tag">{{ lecture.category_name || '未分类' }}</span></td>
               <td>{{ lecture.chapters?.length || 0 }}</td>
+              <td>
+                <label class="toggle-label">
+                  <input type="checkbox" :checked="lecture.is_public === 1" @change="togglePublic(lecture, $event)" />
+                  <span>{{ lecture.is_public === 1 ? '公开' : '隐藏' }}</span>
+                </label>
+              </td>
               <td>{{ formatDate(lecture.created_at) }}</td>
               <td>
                 <div class="actions">
@@ -174,6 +181,21 @@ async function assignCategory(lecture, categoryId) {
     lectures.value = lectures.value.map(item => item.id === lecture.id ? res.data : item)
   } catch (e) {
     error.value = e.response?.data?.error || '分类更新失败'
+  }
+}
+
+async function togglePublic(lecture, event) {
+  error.value = ''
+  const isPublic = event.target.checked ? 1 : 0
+  try {
+    const token = localStorage.getItem('adminToken')
+    const res = await axios.put(`/api/lectures/${lecture.id}/public`, { is_public: isPublic }, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    })
+    lectures.value = lectures.value.map(item => item.id === lecture.id ? res.data : item)
+  } catch (e) {
+    error.value = e.response?.data?.error || '更新失败'
+    event.target.checked = !event.target.checked
   }
 }
 
@@ -425,6 +447,22 @@ tbody tr:last-child td {
   padding: 34px;
   color: #7a8494;
   text-align: center;
+}
+
+.toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #4d596d;
+}
+
+.toggle-label input {
+  width: 16px;
+  height: 16px;
+  accent-color: #2f6fed;
+  cursor: pointer;
 }
 
 @media (max-width: 720px) {

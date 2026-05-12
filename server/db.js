@@ -55,6 +55,7 @@ async function initDb() {
         zip_name TEXT NOT NULL,
         category_id INTEGER,
         cover_path TEXT,
+        layout_mode TEXT DEFAULT 'system',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
@@ -66,6 +67,7 @@ async function initDb() {
         title TEXT NOT NULL,
         slug TEXT NOT NULL,
         path TEXT NOT NULL,
+        entry_file TEXT DEFAULT 'index.html',
         order_index INTEGER DEFAULT 0
       )
     `);
@@ -123,7 +125,11 @@ function ensureSchema() {
   ensureColumn('students', 'email', 'email TEXT');
   ensureColumn('students', 'status', "status TEXT DEFAULT 'active'");
   ensureColumn('students', 'last_login', 'last_login DATETIME');
+  ensureColumn('students', 'real_name', 'real_name TEXT');
   ensureColumn('lectures', 'cover_path', 'cover_path TEXT');
+  ensureColumn('lectures', 'is_public', 'is_public INTEGER DEFAULT 0');
+  ensureColumn('lectures', 'layout_mode', "layout_mode TEXT DEFAULT 'system'");
+  ensureColumn('chapters', 'entry_file', "entry_file TEXT DEFAULT 'index.html'");
 
   db.run(`
     CREATE TABLE IF NOT EXISTS user_activity (
@@ -158,6 +164,32 @@ function ensureSchema() {
   ensureColumn('knowledge_docs', 'file_name', 'file_name TEXT');
   ensureColumn('knowledge_docs', 'file_type', 'file_type TEXT');
   ensureColumn('knowledge_docs', 'cover_path', 'cover_path TEXT');
+  ensureColumn('knowledge_docs', 'is_public', 'is_public INTEGER DEFAULT 0');
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS groups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS group_students (
+      group_id INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      PRIMARY KEY (group_id, student_id)
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS group_category_permissions (
+      group_id INTEGER NOT NULL,
+      category_id INTEGER NOT NULL,
+      PRIMARY KEY (group_id, category_id)
+    )
+  `);
 
   db.run('CREATE INDEX IF NOT EXISTS idx_user_activity_user_id ON user_activity(user_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_user_activity_created_at ON user_activity(created_at)');

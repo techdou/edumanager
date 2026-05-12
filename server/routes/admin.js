@@ -25,7 +25,7 @@ function normalizeStatus(status, fallback = 'active') {
 
 function getUserById(id) {
   return db.get(`
-    SELECT s.id, s.username, s.email, s.status, s.last_login, s.created_at,
+    SELECT s.id, s.username, s.email, s.status, s.real_name, s.last_login, s.created_at,
            CASE WHEN a.id IS NULL THEN 'student' ELSE 'admin' END AS role
     FROM students s
     LEFT JOIN admins a ON a.username = s.username
@@ -109,7 +109,7 @@ router.get('/users', (req, res) => {
   `, params);
 
   const items = db.query(`
-    SELECT s.id, s.username, s.email, s.status, s.last_login, s.created_at,
+    SELECT s.id, s.username, s.email, s.status, s.real_name, s.last_login, s.created_at,
            CASE WHEN a.id IS NULL THEN 'student' ELSE 'admin' END AS role
     FROM students s
     LEFT JOIN admins a ON a.username = s.username
@@ -119,6 +119,15 @@ router.get('/users', (req, res) => {
   `, [...params, pageSize, offset]);
 
   const total = Number(countRow?.total || 0);
+
+  items.forEach(item => {
+    item.groups = db.query(`
+      SELECT g.id, g.name FROM groups g
+      INNER JOIN group_students gs ON gs.group_id = g.id
+      WHERE gs.student_id = ?
+    `, [item.id]);
+  });
+
   res.json({
     items,
     total,
@@ -420,6 +429,136 @@ router.delete('/categories/:id', (req, res) => {
   }
 
   db.run('DELETE FROM categories WHERE id = ?', [req.params.id]);
+  res.json({ success: true });
+});
+
+// ===== 班级管理 =====
+
+// 班级列表
+router.get('/groups', (req, res) => {
+  const groups = db.query(`
+    SELECT g.id, g.name, g.description, g.created_at,
+           (SELECT COUNT(*) FROM group_students WHERE group_id = g.id) AS student_count
+    FROM groups g
+    ORDER BY g.created_at DESC
+  `);
+  groups.forEach(g => { g.student_count = Number(g.student_count); });
+  res.json(groups);
+});
+
+// 创建班级
+router.post('/groups', (req, res) => {
+  const name = String(req.body.name || '').trim();
+  const description = String(req.body.description || '').trim() || null;
+  if (!name) {
+    return res.status(400).json({ error: '班级名称必填' });
+  }
+
+  const result = db.run('INSERT INTO groups (name, description) VALUES (?, ?)', [name, description]);
+  const group = db.get('SELECT id, name, description, created_at FROM groups WHERE id = ?', [result.lastInsertRowid]);
+  group.student_count = 0;
+  res.status(201).json(group);
+});
+
+// 编辑班级
+router.put('/groups/:id', (req, res) => {
+  const name = String(req.body.name || '').trim();
+  const description = String(req.body.description || '').trim() || null;
+  if (!name) {
+    return res.status(400).json({ error: '班级名称必填' });
+  }
+
+  const group = db.get('SELECT id FROM groups WHERE id = ?', [req.params.id]);
+  if (!group) {
+    return res.status(404).json({ error: '班级不存在' });
+  }
+
+  db.run('UPDATE groups SET name = ?, description = ? WHERE id = ?', [name, description, req.params.id]);
+  const updated = db.get('SELECT id, name, description, created_at FROM groups WHERE id = ?', [req.params.id]);
+  updated.student_count = Number(db.get('SELECT COUNT(*) AS c FROM group_students WHERE group_id = ?', [req.params.id]).c);
+  res.json(updated);
+});
+
+// 删除班级
+router.delete('/groups/:id', (req, res) => {
+  const group = db.get('SELECT id FROM groups WHERE id = ?', [req.params.id]);
+  if (!group) {
+    return res.status(404).json({ error: '班级不存在' });
+  }
+
+  db.run('DELETE FROM group_students WHERE group_id = ?', [req.params.id]);
+  db.run('DELETE FROM group_category_permissions WHERE group_id = ?', [req.params.id]);
+  db.run('DELETE FROM groups WHERE id = ?', [req.params.id]);
+  res.json({ success: true });
+});
+
+// 班级详情（含学生和分类权限）
+router.get('/groups/:id', (req, res) => {
+  const group = db.get('SELECT id, name, description, created_at FROM groups WHERE id = ?', [req.params.id]);
+  if (!group) {
+    return res.status(404).json({ error: '班级不存在' });
+  }
+
+  const students = db.query(`
+    SELECT s.id, s.username, s.real_name, s.email
+    FROM students s
+    INNER JOIN group_students gs ON gs.student_id = s.id
+    WHERE gs.group_id = ?
+  `, [req.params.id]);
+
+  const categories = db.query(`
+    SELECT c.id, c.name
+    FROM categories c
+    INNER JOIN group_category_permissions gcp ON gcp.category_id = c.id
+    WHERE gcp.group_id = ?
+  `, [req.params.id]);
+
+  res.json({ ...group, students, categories });
+});
+
+// 添加学生到班级
+router.post('/groups/:id/students', (req, res) => {
+  const studentId = Number(req.body.studentId);
+  if (!studentId) {
+    return res.status(400).json({ error: '请指定学生' });
+  }
+
+  const group = db.get('SELECT id FROM groups WHERE id = ?', [req.params.id]);
+  if (!group) {
+    return res.status(404).json({ error: '班级不存在' });
+  }
+
+  const student = db.get('SELECT id FROM students WHERE id = ?', [studentId]);
+  if (!student) {
+    return res.status(404).json({ error: '学生不存在' });
+  }
+
+  const existing = db.get('SELECT group_id FROM group_students WHERE group_id = ? AND student_id = ?', [req.params.id, studentId]);
+  if (!existing) {
+    db.run('INSERT INTO group_students (group_id, student_id) VALUES (?, ?)', [req.params.id, studentId]);
+  }
+  res.json({ success: true });
+});
+
+// 移除学生
+router.delete('/groups/:id/students/:sid', (req, res) => {
+  db.run('DELETE FROM group_students WHERE group_id = ? AND student_id = ?', [req.params.id, req.params.sid]);
+  res.json({ success: true });
+});
+
+// 设置班级可访问分类（全量替换）
+router.post('/groups/:id/categories', (req, res) => {
+  const categoryIds = Array.isArray(req.body.categoryIds) ? req.body.categoryIds.map(Number) : [];
+
+  const group = db.get('SELECT id FROM groups WHERE id = ?', [req.params.id]);
+  if (!group) {
+    return res.status(404).json({ error: '班级不存在' });
+  }
+
+  db.run('DELETE FROM group_category_permissions WHERE group_id = ?', [req.params.id]);
+  categoryIds.forEach(catId => {
+    db.run('INSERT INTO group_category_permissions (group_id, category_id) VALUES (?, ?)', [req.params.id, catId]);
+  });
   res.json({ success: true });
 });
 

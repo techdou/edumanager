@@ -10,10 +10,19 @@
       <form @submit.prevent="register" class="form">
         <div class="form-group">
           <label class="form-label">用户名</label>
-          <input 
-            v-model="username" 
-            placeholder="创建用户名" 
-            required 
+          <input
+            v-model="username"
+            placeholder="创建用户名"
+            required
+            class="input"
+          />
+        </div>
+        <div class="form-group">
+          <label class="form-label required-label">真实姓名（必填）</label>
+          <input
+            v-model="realName"
+            placeholder="请输入真实姓名"
+            required
             class="input"
           />
         </div>
@@ -62,6 +71,7 @@ import axios from 'axios'
 
 const router = useRouter()
 const username = ref('')
+const realName = ref('')
 const password = ref('')
 const confirmPassword = ref('')
 const error = ref('')
@@ -76,13 +86,18 @@ async function register() {
     error.value = '两次密码输入不一致'
     return
   }
-  
+  if (!realName.value.trim()) {
+    error.value = '真实姓名必填'
+    return
+  }
+
   loading.value = true
   error.value = ''
   try {
     const res = await axios.post('/api/auth/student/register', {
       username: username.value,
-      password: password.value
+      password: password.value,
+      real_name: realName.value.trim()
     })
     const { token, username: uname, role } = res.data
     if (role === 'admin') {
@@ -165,6 +180,11 @@ async function register() {
   font-size: var(--text-sm);
   font-weight: 600;
   color: var(--color-ink-secondary);
+}
+
+.required-label::after {
+  content: ' *';
+  color: var(--color-error);
 }
 
 .error-alert {

@@ -22,6 +22,16 @@ const routes = [
     meta: { requiresStudent: true, title: '讲义学习 - EduManager' }
   },
   {
+    path: '/learn',
+    component: () => import('../views/Learn.vue'),
+    meta: { requiresStudent: true, title: '学习中心 - EduManager' }
+  },
+  {
+    path: '/profile',
+    component: () => import('../views/Profile.vue'),
+    meta: { requiresStudent: true, title: '学生中心 - EduManager' }
+  },
+  {
     path: '/admin',
     component: () => import('../views/admin/Login.vue'),
     meta: { title: '管理员登录 - EduManager' }
@@ -55,6 +65,11 @@ const routes = [
         path: 'lectures',
         component: () => import('../views/admin/Dashboard.vue'),
         meta: { title: '讲义管理 - EduManager 后台' }
+      },
+      {
+        path: 'groups',
+        component: () => import('../views/admin/Groups.vue'),
+        meta: { title: '班级管理 - EduManager 后台' }
       },
       {
         path: 'knowledge',

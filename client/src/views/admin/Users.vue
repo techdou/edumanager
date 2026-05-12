@@ -33,9 +33,11 @@
           <thead>
             <tr>
               <th>用户名</th>
+              <th>真实姓名</th>
               <th>邮箱</th>
               <th>角色</th>
               <th>状态</th>
+              <th>班级</th>
               <th>注册时间</th>
               <th>最后登录</th>
               <th>操作</th>
@@ -44,9 +46,16 @@
           <tbody>
             <tr v-for="user in users" :key="user.id">
               <td class="primary-cell">{{ user.username }}</td>
+              <td>{{ user.real_name || '-' }}</td>
               <td>{{ user.email || '-' }}</td>
               <td><span class="tag" :class="user.role">{{ roleText(user.role) }}</span></td>
               <td><span class="tag" :class="user.status">{{ statusText(user.status) }}</span></td>
+              <td>
+                <div v-if="user.groups && user.groups.length > 0" class="group-tags">
+                  <span v-for="g in user.groups" :key="g.id" class="tag group">{{ g.name }}</span>
+                </div>
+                <span v-else style="color: #7a8494;">-</span>
+              </td>
               <td>{{ formatDate(user.created_at) }}</td>
               <td>{{ formatDate(user.last_login) }}</td>
               <td>
@@ -397,7 +406,7 @@ function formatDate(value) {
 
 table {
   width: 100%;
-  min-width: 960px;
+  min-width: 1100px;
   border-collapse: collapse;
 }
 
@@ -448,6 +457,17 @@ tbody tr:last-child td {
 .tag.disabled {
   background: #fff4f2;
   color: #b42318;
+}
+
+.tag.group {
+  background: #f0f4ff;
+  color: #2f6fed;
+}
+
+.group-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .actions {

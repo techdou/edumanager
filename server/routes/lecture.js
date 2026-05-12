@@ -9,6 +9,8 @@ const db = require('../db');
 
 // 管理员权限中间件（用于需要管理员的操作）
 const adminAuth = require('../middleware/adminAuth');
+const { studentAuth, optionalStudentAuth } = require('../middleware/studentAuth');
+const { filterAccessibleLectures } = require('../utils/permissions');
 const { extractTOC } = require('../utils/tocExtractor');
 
 // ZIP 上传配置
@@ -75,41 +77,161 @@ function getPublicLecture(lecture) {
   };
 }
 
+function isHtmlFile(name) {
+  return /\.(html?|xhtml)$/i.test(name);
+}
+
+function normalizeZipPath(value) {
+  return String(value || '').replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
+function htmlTitle(filePath, fallback) {
+  try {
+    const html = fs.readFileSync(filePath, 'utf8');
+    const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
+      || html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1];
+    if (title) return title.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim() || fallback;
+  } catch {}
+  return fallback;
+}
+
+function chapterSlugFromName(name, used = new Set()) {
+  const base = path.parse(name).name || name || 'chapter';
+  let slug = base
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/[?#/\\]+/g, '-')
+    .slice(0, 80) || 'chapter';
+  let next = slug;
+  let index = 2;
+  while (used.has(next)) {
+    next = `${slug}-${index}`;
+    index += 1;
+  }
+  used.add(next);
+  return next;
+}
+
+function listHtmlFiles(root) {
+  const files = [];
+  function walk(dir) {
+    for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (item.name.startsWith('.') || item.name === '__MACOSX') continue;
+      const fullPath = path.join(dir, item.name);
+      if (item.isDirectory()) {
+        walk(fullPath);
+      } else if (isHtmlFile(item.name)) {
+        files.push(path.relative(root, fullPath).split(path.sep).join('/'));
+      }
+    }
+  }
+  walk(root);
+  return files.sort((a, b) => {
+    const aIndex = path.basename(a).toLowerCase() === 'index.html' ? 0 : 1;
+    const bIndex = path.basename(b).toLowerCase() === 'index.html' ? 0 : 1;
+    return aIndex - bIndex || a.localeCompare(b, 'zh-CN');
+  });
+}
+
+function chooseEntry(files) {
+  return files.find(file => path.basename(file).toLowerCase() === 'index.html')
+    || files.find(file => path.basename(file).toLowerCase() === 'index.htm')
+    || files[0];
+}
+
+function buildChapterCandidates(root) {
+  const contentRoot = resolveContentRoot(root);
+  const rootPrefix = path.relative(root, contentRoot).split(path.sep).join('/');
+  const withPrefix = (dir) => [rootPrefix, dir].filter(Boolean).join('/');
+  const htmlFiles = listHtmlFiles(contentRoot);
+  if (htmlFiles.length === 0) return [];
+
+  const rootHtml = htmlFiles.filter(file => !file.includes('/'));
+  const grouped = new Map();
+  htmlFiles
+    .filter(file => file.includes('/'))
+    .forEach(file => {
+      const top = file.split('/')[0];
+      if (!grouped.has(top)) grouped.set(top, []);
+      grouped.get(top).push(file);
+    });
+
+  const chapters = [];
+  if (rootHtml.length > 0) {
+    const entry = chooseEntry(rootHtml);
+    chapters.push({
+      title: htmlTitle(path.join(contentRoot, entry), path.parse(entry).name),
+      slugSource: entry,
+      path: withPrefix(''),
+      entryFile: entry
+    });
+  }
+
+  for (const [top, files] of grouped.entries()) {
+    const entry = chooseEntry(files);
+    chapters.push({
+      title: htmlTitle(path.join(contentRoot, entry), top),
+      slugSource: top,
+      path: withPrefix(path.dirname(entry) === '.' ? '' : path.dirname(entry)),
+      entryFile: path.basename(entry)
+    });
+  }
+
+  return chapters.length > 0 ? chapters : [{
+    title: htmlTitle(path.join(contentRoot, htmlFiles[0]), path.parse(htmlFiles[0]).name),
+    slugSource: htmlFiles[0],
+    path: withPrefix(path.dirname(htmlFiles[0]) === '.' ? '' : path.dirname(htmlFiles[0])),
+    entryFile: path.basename(htmlFiles[0])
+  }];
+}
+
+function resolveContentRoot(root) {
+  const rootHtml = fs.readdirSync(root, { withFileTypes: true })
+    .some(item => item.isFile() && isHtmlFile(item.name));
+  if (rootHtml) return root;
+
+  const dirs = fs.readdirSync(root, { withFileTypes: true })
+    .filter(item => item.isDirectory() && !item.name.startsWith('.') && item.name !== '__MACOSX');
+  if (dirs.length !== 1) return root;
+
+  const onlyDir = path.join(root, dirs[0].name);
+  const nestedHtml = listHtmlFiles(onlyDir);
+  return nestedHtml.length > 0 ? onlyDir : root;
+}
+
 function inspectZip(filePath) {
   const zip = new AdmZip(filePath);
   const entries = zip.getEntries().filter(entry => !entry.entryName.startsWith('__MACOSX/'));
   const htmlFiles = entries
-    .filter(entry => !entry.isDirectory && entry.entryName.toLowerCase().endsWith('.html'))
-    .map(entry => entry.entryName);
-  const directories = new Set();
-
-  entries.forEach(entry => {
-    const parts = entry.entryName.split('/').filter(Boolean);
-    if (parts.length > 1) directories.add(parts[0]);
+    .filter(entry => !entry.isDirectory && isHtmlFile(entry.entryName))
+    .map(entry => normalizeZipPath(entry.entryName));
+  const groups = new Map();
+  htmlFiles.forEach(file => {
+    const parts = file.split('/').filter(Boolean);
+    const key = parts.length > 1 ? parts[0] : '(根目录)';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(file);
   });
 
-  const topLevelDirs = [...directories].filter(name => !name.startsWith('.'));
-  const rootHasIndex = htmlFiles.some(name => name.toLowerCase() === 'index.html');
-  const rootHtml = htmlFiles.filter(name => !name.includes('/'));
-  const chapterChecks = topLevelDirs.map(name => ({
+  const chapters = [...groups.entries()].map(([name, files]) => ({
     name,
-    hasIndex: htmlFiles.some(file => file.toLowerCase() === `${name.toLowerCase()}/index.html`),
-    htmlCount: htmlFiles.filter(file => file.startsWith(`${name}/`)).length
+    preferredHtml: chooseEntry(files),
+    hasIndex: files.some(file => path.basename(file).toLowerCase() === 'index.html'),
+    htmlCount: files.length
   }));
-  const missingIndex = chapterChecks.filter(item => !item.hasIndex);
+  const missingIndex = chapters.filter(item => !item.hasIndex);
 
   return {
     entryCount: entries.length,
     htmlCount: htmlFiles.length,
-    mode: topLevelDirs.length > 0 ? 'multi-chapter' : 'single-page',
-    rootHasIndex,
-    rootHtml,
-    chapters: chapterChecks,
+    mode: chapters.length > 1 ? 'multi-chapter' : 'single-page',
+    rootHasIndex: htmlFiles.some(name => name.toLowerCase() === 'index.html'),
+    rootHtml: htmlFiles.filter(name => !name.includes('/')),
+    chapters,
     missingIndex,
     warnings: [
       ...(htmlFiles.length === 0 ? ['未找到 HTML 文件'] : []),
-      ...(topLevelDirs.length === 0 && !rootHasIndex && rootHtml.length > 0 ? ['根目录未找到 index.html，上传时会自动把第一个 HTML 重命名为 index.html'] : []),
-      ...(missingIndex.length > 0 ? [`${missingIndex.length} 个章节目录缺少 index.html，上传时会尝试使用目录内第一个 HTML 文件替代`] : [])
+      ...(missingIndex.length > 0 ? [`${missingIndex.length} 个章节未使用 index.html，系统会保留原文件名并自动指向可用 HTML`] : [])
     ]
   };
 }
@@ -127,11 +249,37 @@ router.post('/precheck', adminAuth, (req, res, next) => {
 }, (req, res) => {
   const file = req.file;
   if (!file) {
-    return res.status(400).json({ error: '请选择 ZIP 文件' });
+    return res.status(400).json({ error: '请选择 ZIP 或 HTML 文件' });
+  }
+  if (isHtmlFile(file.originalname)) {
+    const result = {
+      entryCount: 1,
+      htmlCount: 1,
+      mode: 'single-page',
+      rootHasIndex: path.basename(file.originalname).toLowerCase() === 'index.html',
+      rootHtml: [file.originalname],
+      chapters: [{
+        name: path.parse(file.originalname).name,
+        preferredHtml: file.originalname,
+        hasIndex: path.basename(file.originalname).toLowerCase() === 'index.html',
+        htmlCount: 1
+      }],
+      missingIndex: path.basename(file.originalname).toLowerCase() === 'index.html' ? [] : [{
+        name: path.parse(file.originalname).name,
+        preferredHtml: file.originalname,
+        hasIndex: false,
+        htmlCount: 1
+      }],
+      warnings: path.basename(file.originalname).toLowerCase() === 'index.html'
+        ? []
+        : ['该 HTML 不是 index.html，系统会保留原文件名并自动作为入口']
+    };
+    cleanupUpload(file);
+    return res.json(result);
   }
   if (!file.originalname.toLowerCase().endsWith('.zip')) {
     cleanupUpload(file);
-    return res.status(400).json({ error: '仅支持 ZIP 文件' });
+    return res.status(400).json({ error: '仅支持 ZIP 或 HTML 文件' });
   }
 
   try {
@@ -145,26 +293,41 @@ router.post('/precheck', adminAuth, (req, res, next) => {
   }
 });
 
-// 讲义列表
-router.get('/', (req, res) => {
+function fetchLectureList() {
   const lectures = db.query(`
-    SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.created_at,
+    SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.layout_mode, l.is_public, l.created_at,
            c.name as category_name
-    FROM lectures l 
-    LEFT JOIN categories c ON l.category_id = c.id 
+    FROM lectures l
+    LEFT JOIN categories c ON l.category_id = c.id
     ORDER BY l.created_at DESC
   `);
-  
-  // 获取每个讲义的章节
-  const lecturesWithChapters = lectures.map(lecture => {
+
+  return lectures.map(lecture => {
     const chapters = db.query(`
-      SELECT id, lecture_id, title, slug, path, order_index 
+      SELECT id, lecture_id, title, slug, path, entry_file, order_index
       FROM chapters WHERE lecture_id = ? ORDER BY order_index
     `, [lecture.id]);
     return getPublicLecture({ ...lecture, chapters });
   });
-  
-  res.json(lecturesWithChapters);
+}
+
+// 讲义列表 - 未登录返回公开，登录后返回公开+有权限
+router.get('/', optionalStudentAuth, (req, res) => {
+  const allLectures = fetchLectureList();
+
+  if (req.query.all === '1' && req.student) {
+    const filtered = filterAccessibleLectures(req.student.id, allLectures);
+    return res.json(filtered);
+  }
+
+  res.json(allLectures.filter(l => l.is_public === 1));
+});
+
+// 学生的学习中心列表
+router.get('/my', studentAuth, (req, res) => {
+  const allLectures = fetchLectureList();
+  const filtered = filterAccessibleLectures(req.student.id, allLectures);
+  res.json(filtered);
 });
 
 // 上传 ZIP 讲义
@@ -185,6 +348,8 @@ router.post('/', adminAuth, (req, res, next) => {
   const title = String(req.body.title || '').trim();
   const slug = String(req.body.slug || '').trim();
   const categoryId = Number(req.body.categoryId);
+  const layoutMode = req.body.layoutMode === 'native' ? 'native' : 'system';
+  const isPublic = req.body.isPublic === '1' || req.body.isPublic === true ? 1 : 0;
   const file = req.files?.file?.[0];
   const cover = req.files?.cover?.[0];
   
@@ -210,9 +375,11 @@ router.post('/', adminAuth, (req, res, next) => {
     return res.status(400).json({ error: 'URL 标识已存在' });
   }
   
-  if (!file.originalname.toLowerCase().endsWith('.zip')) {
+  const isZip = file.originalname.toLowerCase().endsWith('.zip');
+  const isSingleHtml = isHtmlFile(file.originalname);
+  if (!isZip && !isSingleHtml) {
     cleanupFiles([file, cover]);
-    return res.status(400).json({ error: '仅支持 ZIP 文件' });
+    return res.status(400).json({ error: '仅支持 ZIP 或 HTML 文件' });
   }
 
   if (!isAllowedCover(cover)) {
@@ -232,57 +399,39 @@ router.post('/', adminAuth, (req, res, next) => {
     }
     fs.mkdirSync(extractPath, { recursive: true });
     
-    // 使用 unar 解压（正确处理 Windows 中文文件名 GBK 编码）
-    try {
-      execFileSync('unar', ['-o', extractPath, file.path], { encoding: 'utf-8' });
-    } catch (e) {
-      // fallback 到 unzip
-      execFileSync('unzip', ['-o', file.path, '-d', extractPath], { encoding: 'utf-8' });
+    if (isSingleHtml) {
+      fs.renameSync(file.path, path.join(extractPath, file.originalname));
+    } else {
+      // 使用 unar 解压（正确处理 Windows 中文文件名 GBK 编码）
+      try {
+        execFileSync('unar', ['-o', extractPath, file.path], { encoding: 'utf-8' });
+      } catch (e) {
+        // fallback 到 unzip
+        execFileSync('unzip', ['-o', file.path, '-d', extractPath], { encoding: 'utf-8' });
+      }
     }
     
     // 创建讲义记录
     const result = db.run(`
-      INSERT INTO lectures (title, slug, zip_name, category_id, cover_path) VALUES (?, ?, ?, ?, ?)
-    `, [title, slug, zipName, categoryId, coverPath]);
+      INSERT INTO lectures (title, slug, zip_name, category_id, cover_path, layout_mode, is_public) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [title, slug, zipName, categoryId, coverPath, layoutMode, isPublic]);
     
     const lectureId = result.lastInsertRowid;
     
-    // 分析目录结构，创建章节
-    const topLevelDirs = fs.readdirSync(extractPath, { withFileTypes: true })
-      .filter(d => d.isDirectory() && !d.name.startsWith('.'));
-    
-    if (topLevelDirs.length === 0) {
-      // 单层 ZIP：没有子目录
-      const htmlFiles = fs.readdirSync(extractPath).filter(f => f.endsWith('.html'));
-      if (htmlFiles.length > 0) {
-        // 重命名第一个 HTML 文件为 index.html
-        if (!fs.existsSync(path.join(extractPath, 'index.html'))) {
-          fs.renameSync(path.join(extractPath, htmlFiles[0]), path.join(extractPath, 'index.html'));
-        }
-        db.run(`
-          INSERT INTO chapters (lecture_id, title, slug, path, order_index) VALUES (?, ?, ?, ?, ?)
-        `, [lectureId, title, slug, slug, 0]);
-      }
-    } else {
-      topLevelDirs.forEach((dir, index) => {
-        const dirPath = path.join(extractPath, dir.name);
-        let indexPath = path.join(dirPath, 'index.html');
-        
-        // 如果没有 index.html，找目录里任意 .html 文件并重命名
-        if (!fs.existsSync(indexPath)) {
-          const htmlFiles = fs.readdirSync(dirPath).filter(f => f.endsWith('.html'));
-          if (htmlFiles.length > 0) {
-            fs.renameSync(path.join(dirPath, htmlFiles[0]), indexPath);
-          }
-        }
-        
-        if (fs.existsSync(indexPath)) {
-          db.run(`
-            INSERT INTO chapters (lecture_id, title, slug, path, order_index) VALUES (?, ?, ?, ?, ?)
-          `, [lectureId, dir.name, dir.name, `${slug}/${dir.name}`, index]);
-        }
-      });
+    const chapterCandidates = buildChapterCandidates(extractPath);
+    if (chapterCandidates.length === 0) {
+      throw new Error('未找到可用 HTML 文件');
     }
+    const usedSlugs = new Set();
+    chapterCandidates.forEach((chapter, index) => {
+      const chapterSlug = chapterCandidates.length === 1
+        ? slug
+        : chapterSlugFromName(chapter.slugSource, usedSlugs);
+      const chapterPath = chapter.path ? `${slug}/${chapter.path}` : slug;
+      db.run(`
+        INSERT INTO chapters (lecture_id, title, slug, path, entry_file, order_index) VALUES (?, ?, ?, ?, ?, ?)
+      `, [lectureId, chapter.title || title, chapterSlug, chapterPath, chapter.entryFile, index]);
+    });
     
     // 删除临时文件
     cleanupUpload(file);
@@ -293,6 +442,7 @@ router.post('/', adminAuth, (req, res, next) => {
       id: lectureId, 
       title, 
       slug, 
+      layout_mode: layoutMode,
       cover_url: coverPath ? `/api/lectures/${lectureId}/cover` : null,
       chapters
     });
@@ -367,14 +517,39 @@ router.put('/:id/category', adminAuth, (req, res) => {
 
   db.run('UPDATE lectures SET category_id = ? WHERE id = ?', [categoryId, id]);
   const updated = db.get(`
-    SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.created_at,
+    SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.layout_mode, l.is_public, l.created_at,
            c.name as category_name
     FROM lectures l
     LEFT JOIN categories c ON l.category_id = c.id
     WHERE l.id = ?
   `, [id]);
   updated.chapters = db.query(`
-    SELECT id, lecture_id, title, slug, path, order_index
+    SELECT id, lecture_id, title, slug, path, entry_file, order_index
+    FROM chapters WHERE lecture_id = ? ORDER BY order_index
+  `, [id]);
+  res.json(getPublicLecture(updated));
+});
+
+// 公开展示开关
+router.put('/:id/public', adminAuth, (req, res) => {
+  const { id } = req.params;
+  const isPublic = req.body.is_public === 1 || req.body.is_public === true ? 1 : 0;
+
+  const lecture = db.get('SELECT * FROM lectures WHERE id = ?', [id]);
+  if (!lecture) {
+    return res.status(404).json({ error: '讲义不存在' });
+  }
+
+  db.run('UPDATE lectures SET is_public = ? WHERE id = ?', [isPublic, id]);
+  const updated = db.get(`
+    SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.layout_mode, l.is_public, l.created_at,
+           c.name as category_name
+    FROM lectures l
+    LEFT JOIN categories c ON l.category_id = c.id
+    WHERE l.id = ?
+  `, [id]);
+  updated.chapters = db.query(`
+    SELECT id, lecture_id, title, slug, path, entry_file, order_index
     FROM chapters WHERE lecture_id = ? ORDER BY order_index
   `, [id]);
   res.json(getPublicLecture(updated));
@@ -384,7 +559,7 @@ router.put('/:id/category', adminAuth, (req, res) => {
 router.get('/toc/:lectureSlug/:chapterSlug', (req, res) => {
   const { lectureSlug, chapterSlug } = req.params;
   const chapter = db.get(`
-    SELECT c.path
+    SELECT c.path, c.entry_file
     FROM chapters c
     INNER JOIN lectures l ON l.id = c.lecture_id
     WHERE l.slug = ? AND c.slug = ?
@@ -394,7 +569,7 @@ router.get('/toc/:lectureSlug/:chapterSlug', (req, res) => {
     return res.status(404).json({ error: 'Chapter not found' });
   }
 
-  const htmlPath = path.join(lecturesRoot, chapter.path, 'index.html');
+  const htmlPath = path.join(lecturesRoot, chapter.path, chapter.entry_file || 'index.html');
   
   if (!fs.existsSync(htmlPath)) {
     return res.status(404).json({ error: 'HTML file not found' });

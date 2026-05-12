@@ -1,5 +1,5 @@
 <template>
-  <div class="lecture-page">
+  <div class="lecture-page" :class="{ 'lecture-page--native': nativeLayout }">
     <header class="lecture-header">
       <div class="header-content">
         <router-link to="/" class="back-link">
@@ -9,7 +9,7 @@
           <span>返回列表</span>
         </router-link>
         <h1 class="lecture-title">{{ lecture?.title || '讲义浏览' }}</h1>
-        <div v-if="currentPath" class="read-progress">
+        <div v-if="currentPath && !nativeLayout" class="read-progress">
           <span>{{ readProgress }}%</span>
           <div><i :style="{ width: `${readProgress}%` }"></i></div>
         </div>
@@ -19,7 +19,7 @@
     <div class="lecture-body">
       <!-- Floating toggle (visible when sidebar collapsed on PC) -->
       <button
-        v-if="!isMobile"
+        v-if="!isMobile && !nativeLayout"
         class="sidebar-pc-toggle"
         :class="{ 'sidebar-pc-toggle--visible': sidebarCollapsed }"
         @click="sidebarCollapsed = false"
@@ -32,6 +32,7 @@
 
       <!-- Mobile hamburger button (shows when sidebar is hidden on mobile) -->
       <button
+        v-if="!nativeLayout"
         class="mobile-sidebar-btn"
         :class="{ 'mobile-sidebar-btn--visible': sidebarCollapsed }"
         @click="sidebarCollapsed = false"
@@ -45,7 +46,7 @@
       </button>
 
       <!-- Sidebar: chapters or TOC -->
-      <aside class="sidebar" :class="{ 'sidebar--collapsed': sidebarCollapsed }">
+      <aside v-if="!nativeLayout" class="sidebar" :class="{ 'sidebar--collapsed': sidebarCollapsed }">
         <div class="sidebar-header">
           <h3 class="sidebar-title">{{ toc ? '章节导航' : '章节目录' }}</h3>
           <button 
@@ -123,9 +124,9 @@
         </div>
         
         <iframe 
-          v-else-if="currentPath"
+          v-else-if="currentSrc"
           ref="viewerFrame"
-          :src="`/lectures/${currentPath}/index.html`"
+          :src="currentSrc"
           class="viewer-frame"
           sandbox="allow-scripts allow-same-origin"
           @load="onIframeLoad"
@@ -168,12 +169,19 @@ const toc = ref(null)
 const activeAnchor = ref('')
 const readProgress = ref(0)
 const showToc = computed(() => !!toc.value && toc.value.modules.length > 0)
+const nativeLayout = computed(() => lecture.value?.layout_mode === 'native')
 const recentKey = 'edumanager:recentLectures'
 
 const currentPath = computed(() => {
   if (!lecture.value || !currentChapter.value) return null
   const chapter = chapters.value.find(item => item.slug === currentChapter.value)
   return chapter?.path || null
+})
+
+const currentSrc = computed(() => {
+  const chapter = chapters.value.find(item => item.slug === currentChapter.value)
+  if (!chapter?.path) return ''
+  return `/lectures/${chapter.path}/${chapter.entry_file || 'index.html'}`
 })
 
 function syncViewportMode() {
@@ -235,7 +243,7 @@ async function loadLecture() {
   chapters.value = lecture.value?.chapters || []
   
   // Try to load TOC for current chapter
-  if (currentPath.value) {
+  if (currentPath.value && !nativeLayout.value) {
     try {
       const tocRes = await axios.get(`/api/lectures/toc/${slug.value}/${currentChapter.value}`)
       toc.value = tocRes.data
@@ -263,7 +271,7 @@ function onIframeLoad() {
     }
   }
   
-  if (!showToc.value || !viewerFrame.value) return
+  if (nativeLayout.value || !showToc.value || !viewerFrame.value) return
   
   const iframe = viewerFrame.value
   try {
@@ -328,7 +336,7 @@ function scrollToAnchor(anchor) {
     }
   } catch {
     // fallback: set iframe src with hash
-    viewerFrame.value.src = `/lectures/${currentPath.value}/index.html${anchor}`
+    viewerFrame.value.src = `${currentSrc.value}${anchor}`
     if (isMobile.value) sidebarCollapsed.value = true
   }
 }
@@ -447,6 +455,18 @@ watch(currentChapter, () => loadLecture())
   max-width: 1440px;
   margin: 0 auto;
   width: 100%;
+}
+
+.lecture-page--native .lecture-header {
+  position: relative;
+}
+
+.lecture-page--native .lecture-body {
+  max-width: none;
+}
+
+.lecture-page--native .viewer {
+  background: #ffffff;
 }
 
 /* Sidebar */
