@@ -362,13 +362,16 @@ router.get('/stats/active-users', (req, res) => {
 // 分类列表
 router.get('/categories', (req, res) => {
   const categories = db.query(`
-    SELECT c.id, c.name, c.created_at, COUNT(l.id) AS lecture_count
+    SELECT c.id, c.name, c.created_at, COUNT(DISTINCT l.id) AS lecture_count
     FROM categories c
     LEFT JOIN lectures l ON l.category_id = c.id
     GROUP BY c.id
     ORDER BY c.created_at DESC
   `);
-  res.json(categories);
+  res.json(categories.map(category => ({
+    ...category,
+    lecture_count: Number(category.lecture_count || 0)
+  })));
 });
 
 // 创建分类
@@ -423,11 +426,9 @@ router.delete('/categories/:id', (req, res) => {
     return res.status(404).json({ error: '分类不存在' });
   }
 
-  const lectures = db.query('SELECT id FROM lectures WHERE category_id = ?', [req.params.id]);
-  if (lectures.length > 0) {
-    return res.status(400).json({ error: '该分类下有讲义，无法删除' });
-  }
-
+  db.run('UPDATE lectures SET category_id = NULL WHERE category_id = ?', [req.params.id]);
+  db.run('UPDATE knowledge_docs SET category_id = NULL WHERE category_id = ?', [req.params.id]);
+  db.run('DELETE FROM group_category_permissions WHERE category_id = ?', [req.params.id]);
   db.run('DELETE FROM categories WHERE id = ?', [req.params.id]);
   res.json({ success: true });
 });

@@ -6,7 +6,10 @@
     </header>
 
     <section class="create-card">
-      <h3>新建分类</h3>
+      <div>
+        <h3>新建分类</h3>
+        <p>用于组织讲义、知识文档和班级访问权限。</p>
+      </div>
       <form class="create-form" @submit.prevent="createCategory">
         <div class="input-group">
           <input
@@ -15,7 +18,7 @@
             placeholder="输入新分类名称，如：机器学习"
             maxlength="50"
           />
-          <button class="btn-primary" type="submit" :disabled="saving || !newName.trim()">
+          <button class="btn-primary" type="submit" :disabled="saving || !newName.trim()" title="添加分类">
             <svg v-if="saving" class="spinner" width="16" height="16" viewBox="0 0 24 24">
               <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="31.4 31.4" />
             </svg>
@@ -61,7 +64,7 @@
           <thead>
             <tr>
               <th class="col-name">分类名称</th>
-              <th class="col-count">讲义数量</th>
+              <th class="col-count">关联讲义</th>
               <th class="col-date">创建时间</th>
               <th class="col-actions">操作</th>
             </tr>
@@ -188,7 +191,7 @@ async function saveEdit(category) {
 }
 
 async function deleteCategory(category) {
-  if (!confirm(`确定删除分类「${category.name}」吗？`)) return
+  if (!confirm(`确定删除分类「${category.name}」吗？相关讲义和知识文档会保留，并自动变为未分类。`)) return
   error.value = ''
   try {
     await adminApi.delete(`/categories/${category.id}`)
@@ -208,7 +211,7 @@ function formatDate(value) {
 .categories-page {
   display: grid;
   gap: 24px;
-  max-width: 960px;
+  max-width: 1080px;
 }
 
 .page-header h1 {
@@ -216,7 +219,7 @@ function formatDate(value) {
   font-weight: 700;
   color: #0f172a;
   margin: 0 0 6px 0;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
 }
 
 .page-header .subtitle {
@@ -226,9 +229,13 @@ function formatDate(value) {
 }
 
 .create-card {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) 1fr;
+  gap: 20px;
+  align-items: start;
   background: #ffffff;
   border: 1px solid #e2e8f0;
-  border-radius: 12px;
+  border-radius: 8px;
   padding: 20px 24px;
 }
 
@@ -236,7 +243,14 @@ function formatDate(value) {
   font-size: 15px;
   font-weight: 600;
   color: #1e293b;
-  margin: 0 0 14px 0;
+  margin: 0 0 6px 0;
+}
+
+.create-card p {
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .create-form {
@@ -256,7 +270,7 @@ function formatDate(value) {
   min-height: 42px;
   padding: 10px 14px;
   border: 1.5px solid #d1d5db;
-  border-radius: 10px;
+  border-radius: 8px;
   background: #ffffff;
   color: #1e293b;
   font: inherit;
@@ -286,7 +300,7 @@ function formatDate(value) {
   min-height: 42px;
   padding: 0 20px;
   border: none;
-  border-radius: 10px;
+  border-radius: 8px;
   background: #2563eb;
   color: white;
   font: inherit;
@@ -323,7 +337,7 @@ function formatDate(value) {
   gap: 10px;
   padding: 12px 16px;
   border: 1px solid #fecaca;
-  border-radius: 10px;
+  border-radius: 8px;
   background: #fef2f2;
   color: #b91c1c;
   font-size: 14px;
@@ -334,7 +348,7 @@ function formatDate(value) {
 .data-card {
   background: #ffffff;
   border: 1px solid #e2e8f0;
-  border-radius: 12px;
+  border-radius: 8px;
   overflow: hidden;
 }
 
@@ -379,8 +393,7 @@ th {
   font-size: 12px;
   font-weight: 600;
   text-align: left;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
 }
 
 td {
@@ -548,9 +561,9 @@ tbody tr:last-child td {
   100% { background-position: -200% 0; }
 }
 
-@media (max-width: 640px) {
-  .create-form {
-    flex-direction: column;
+@media (max-width: 720px) {
+  .create-card {
+    grid-template-columns: 1fr;
   }
 
   .input-group {

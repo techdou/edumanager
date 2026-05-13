@@ -134,13 +134,24 @@
         />
         
         <div v-else-if="iframeError" class="empty-state">
-          <div class="empty-state-icon">📭</div>
+          <div class="empty-state-icon" aria-hidden="true">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <path d="M21 15V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9"/>
+              <path d="M3 15h5l2 3h4l2-3h5"/>
+              <path d="M21 15v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3"/>
+            </svg>
+          </div>
           <h3 class="empty-state-title">讲义内容暂未上传</h3>
           <p class="empty-state-desc">该章节的内容尚未准备好，请联系管理员上传讲义文件</p>
         </div>
         
         <div v-else class="empty-state">
-          <div class="empty-state-icon">📖</div>
+          <div class="empty-state-icon" aria-hidden="true">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <path d="M2 4h7a4 4 0 0 1 4 4v12a3 3 0 0 0-3-3H2z"/>
+              <path d="M22 4h-7a4 4 0 0 0-4 4v12a3 3 0 0 1 3-3h8z"/>
+            </svg>
+          </div>
           <h3 class="empty-state-title">选择章节开始阅读</h3>
           <p class="empty-state-desc">从左侧目录选择章节，讲义内容将在此显示</p>
         </div>

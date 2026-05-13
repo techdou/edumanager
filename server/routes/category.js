@@ -24,13 +24,15 @@ router.post('/', adminAuth, (req, res) => {
 // 删除分类（需管理员）
 router.delete('/:id', adminAuth, (req, res) => {
   const { id } = req.params;
-  
-  // 检查是否有讲义使用此分类
-  const lectures = db.query('SELECT id FROM lectures WHERE category_id = ?', [id]);
-  if (lectures.length > 0) {
-    return res.status(400).json({ error: '该分类下有讲义，无法删除' });
+
+  const category = db.get('SELECT id FROM categories WHERE id = ?', [id]);
+  if (!category) {
+    return res.status(404).json({ error: '分类不存在' });
   }
-  
+
+  db.run('UPDATE lectures SET category_id = NULL WHERE category_id = ?', [id]);
+  db.run('UPDATE knowledge_docs SET category_id = NULL WHERE category_id = ?', [id]);
+  db.run('DELETE FROM group_category_permissions WHERE category_id = ?', [id]);
   db.run('DELETE FROM categories WHERE id = ?', [id]);
   res.json({ success: true });
 });

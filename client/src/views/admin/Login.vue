@@ -2,7 +2,7 @@
   <div class="login-page">
     <div class="login-card">
       <div class="login-header">
-        <div class="logo">🛡️</div>
+        <div class="logo">E</div>
         <h1 class="title">管理员登录</h1>
         <p class="subtitle">管理后台访问需要管理员权限</p>
       </div>
@@ -23,7 +23,7 @@
       </form>
       
       <div v-if="error" class="error-alert" style="margin-top: var(--space-4)">
-        <span>⚠️</span>
+        <span class="alert-mark">!</span>
         <span>{{ error }}</span>
       </div>
       
@@ -94,7 +94,16 @@ async function login() {
 }
 
 .logo {
-  font-size: var(--text-3xl);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  background: var(--color-primary);
+  color: #ffffff;
+  font-size: var(--text-lg);
+  font-weight: 800;
   margin-bottom: var(--space-4);
 }
 
@@ -134,5 +143,24 @@ async function login() {
   color: var(--color-ink-tertiary);
   font-size: var(--text-xs);
   margin-top: var(--space-6);
+}
+
+.error-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.alert-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 800;
 }
 </style>

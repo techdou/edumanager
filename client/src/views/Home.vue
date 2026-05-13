@@ -40,7 +40,7 @@
         <div class="hero-glow-secondary"></div>
         <div class="container hero-inner">
           <div class="hero-text">
-            <p class="hero-eyebrow">🎓 智慧教育平台</p>
+            <p class="hero-eyebrow">智慧教育平台</p>
             <h1 class="hero-title">
               让教学资源管理<br><span class="hero-gradient">更高效、更有序</span>
             </h1>
@@ -57,7 +57,7 @@
                 进入学习
               </router-link>
               <router-link to="/admin" class="hero-btn hero-btn--ghost">
-                管理后台 →
+                管理后台
               </router-link>
             </div>
           </div>
@@ -92,7 +92,7 @@
             </div>
           </div>
         </div>
-        <!-- Hero → Content 过渡衔接 -->
+        <!-- Hero to content transition -->
         <div class="hero-bridge">
           <div class="bridge-line"></div>
           <div class="bridge-stats">
@@ -692,7 +692,7 @@ onUnmounted(() => {
   color: var(--color-ink-tertiary);
 }
 
-/* Hero → Content Bridge */
+/* Hero to Content Bridge */
 .hero-bridge {
   display: flex;
   align-items: center;

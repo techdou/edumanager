@@ -2,7 +2,7 @@
   <div class="login-page">
     <div class="login-card">
       <div class="login-header">
-        <div class="logo">📚</div>
+        <div class="logo">E</div>
         <h1 class="title">学生登录</h1>
         <p class="subtitle">登录后即可浏览全部讲义</p>
       </div>
@@ -29,7 +29,7 @@
         </div>
         
         <div v-if="error" class="error-alert">
-          <span>⚠️</span>
+          <span class="alert-mark">!</span>
           <span>{{ error }}</span>
         </div>
         
@@ -124,7 +124,16 @@ async function login() {
 }
 
 .logo {
-  font-size: var(--text-3xl);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  background: var(--color-primary);
+  color: #ffffff;
+  font-size: var(--text-lg);
+  font-weight: 800;
   margin-bottom: var(--space-4);
 }
 
@@ -169,6 +178,19 @@ async function login() {
   border: 1px solid oklch(0.85 0.05 25);
   color: var(--color-error);
   font-size: var(--text-sm);
+}
+
+.alert-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .btn {
