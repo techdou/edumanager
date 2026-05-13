@@ -5,11 +5,14 @@ const { execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const AdmZip = require('adm-zip');
+const jwt = require('jsonwebtoken');
 const db = require('../db');
 
 // 管理员权限中间件（用于需要管理员的操作）
 const adminAuth = require('../middleware/adminAuth');
 const { studentAuth, optionalStudentAuth } = require('../middleware/studentAuth');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'edumanager-default-secret';
 const { filterAccessibleLectures, canAccessLecture } = require('../utils/permissions');
 const { extractTOC } = require('../utils/tocExtractor');
 
@@ -311,9 +314,21 @@ function fetchLectureList() {
   });
 }
 
-// 讲义列表 - 未登录返回公开，登录后自动返回公开+有权限
+// 讲义列表 - 未登录返回公开，登录后自动返回公开+有权限，管理员返回全部
 router.get('/', optionalStudentAuth, (req, res) => {
   const allLectures = fetchLectureList();
+
+  // 检查是否是管理员请求
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      if (decoded.role === 'admin') {
+        const admin = db.get('SELECT id FROM admins WHERE username = ?', [decoded.username]);
+        if (admin) return res.json(allLectures);
+      }
+    } catch {}
+  }
 
   res.json(filterAccessibleLectures(req.student?.id, allLectures));
 });
