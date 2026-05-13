@@ -143,9 +143,11 @@ async function fetchLectures() {
   loading.value = true
   error.value = ''
   try {
+    const token = localStorage.getItem('adminToken')
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
     const [lectureRes, categoryRes] = await Promise.all([
-      axios.get('/api/lectures'),
-      axios.get('/api/categories')
+      axios.get('/api/lectures', { headers }),
+      axios.get('/api/categories', { headers })
     ])
     lectures.value = lectureRes.data
     categories.value = categoryRes.data

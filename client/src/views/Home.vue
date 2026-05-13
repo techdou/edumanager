@@ -13,7 +13,7 @@
         <nav class="nav">
           <template v-if="isLoggedIn">
             <router-link to="/learn" class="nav-link">学习中心</router-link>
-            <router-link to="/profile" class="nav-link nav-link--user">{{ studentUsername }}</router-link>
+            <router-link to="/profile" class="nav-link nav-link--user">学生中心</router-link>
             <button class="nav-link" @click="logout">退出</button>
           </template>
           <template v-else>

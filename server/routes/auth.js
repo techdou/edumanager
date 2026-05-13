@@ -165,4 +165,27 @@ router.get('/student/profile', studentAuth, (req, res) => {
   res.json({ ...student, groups, accessibleCategories: categoryNames });
 });
 
+// 学生更新个人资料
+router.put('/student/profile', studentAuth, (req, res) => {
+  const { real_name, email } = req.body;
+  const student = db.get('SELECT id, username, email, real_name, created_at FROM students WHERE id = ?', [req.student.id]);
+  if (!student) {
+    return res.status(404).json({ error: '用户不存在' });
+  }
+
+  const newRealName = real_name !== undefined ? String(real_name || '').trim() || null : student.real_name;
+  const newEmail = email !== undefined ? String(email || '').trim() || null : student.email;
+
+  db.run('UPDATE students SET real_name = ?, email = ? WHERE id = ?', [newRealName, newEmail, req.student.id]);
+
+  const updated = db.get('SELECT id, username, email, real_name, created_at FROM students WHERE id = ?', [req.student.id]);
+  const groups = getStudentGroups(req.student.id);
+  const accessibleCategories = getAccessibleCategories(req.student.id);
+  const categoryNames = accessibleCategories.length > 0
+    ? db.query(`SELECT id, name FROM categories WHERE id IN (${accessibleCategories.map(() => '?').join(',')})`, accessibleCategories)
+    : [];
+
+  res.json({ ...updated, groups, accessibleCategories: categoryNames });
+});
+
 module.exports = router;
