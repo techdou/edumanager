@@ -56,22 +56,21 @@
 
           <div class="form-group">
             <label class="form-label">页面布局</label>
-            <div class="layout-options">
-              <label :class="['layout-option', { active: layoutMode === 'system' }]">
-                <input v-model="layoutMode" type="radio" value="system" />
-                <span>
-                  <strong>系统阅读布局</strong>
-                  <small>保留顶部、目录、进度等学习工作台能力</small>
-                </span>
-              </label>
-              <label :class="['layout-option', { active: layoutMode === 'native' }]">
-                <input v-model="layoutMode" type="radio" value="native" />
-                <span>
-                  <strong>使用 HTML 自带布局</strong>
-                  <small>适合自带 CSS、导航和交互的完整网页讲义</small>
-                </span>
-              </label>
-            </div>
+            <button
+              type="button"
+              :class="['layout-toggle', { active: layoutMode === 'native' }]"
+              @click="layoutMode = layoutMode === 'native' ? 'system' : 'native'"
+            >
+              <span class="toggle-switch"><i></i></span>
+              <span>
+                <strong>{{ layoutMode === 'native' ? '使用 HTML 自带布局' : '使用系统默认布局' }}</strong>
+                <small>
+                  {{ layoutMode === 'native'
+                    ? '适合 HTML 已自带 CSS、导航和完整页面交互的讲义。'
+                    : '保留平台顶部、目录、阅读进度等默认学习工作台布局。' }}
+                </small>
+              </span>
+            </button>
           </div>
 
           <div class="form-group">
@@ -481,12 +480,6 @@ async function upload() {
   background: var(--color-primary-subtle);
 }
 
-.layout-options {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3);
-}
-
 .layout-option {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -519,6 +512,71 @@ async function upload() {
 }
 
 .layout-option small {
+  margin-top: var(--space-1);
+  color: var(--color-ink-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.layout-toggle {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.layout-toggle.active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-subtle);
+}
+
+.toggle-switch {
+  width: 46px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--color-border);
+  transition: background var(--duration-fast) var(--ease-out-expo);
+}
+
+.toggle-switch i {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.18);
+  transition: transform var(--duration-fast) var(--ease-out-expo);
+}
+
+.layout-toggle.active .toggle-switch {
+  background: var(--color-primary);
+}
+
+.layout-toggle.active .toggle-switch i {
+  transform: translateX(20px);
+}
+
+.layout-toggle strong,
+.layout-toggle small {
+  display: block;
+}
+
+.layout-toggle strong {
+  font-size: var(--text-sm);
+}
+
+.layout-toggle small {
   margin-top: var(--space-1);
   color: var(--color-ink-tertiary);
   font-size: var(--text-xs);

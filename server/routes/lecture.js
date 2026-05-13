@@ -10,7 +10,7 @@ const db = require('../db');
 // 管理员权限中间件（用于需要管理员的操作）
 const adminAuth = require('../middleware/adminAuth');
 const { studentAuth, optionalStudentAuth } = require('../middleware/studentAuth');
-const { filterAccessibleLectures } = require('../utils/permissions');
+const { filterAccessibleLectures, canAccessLecture } = require('../utils/permissions');
 const { extractTOC } = require('../utils/tocExtractor');
 
 // ZIP 上传配置
@@ -311,16 +311,11 @@ function fetchLectureList() {
   });
 }
 
-// 讲义列表 - 未登录返回公开，登录后返回公开+有权限
+// 讲义列表 - 未登录返回公开，登录后自动返回公开+有权限
 router.get('/', optionalStudentAuth, (req, res) => {
   const allLectures = fetchLectureList();
 
-  if (req.query.all === '1' && req.student) {
-    const filtered = filterAccessibleLectures(req.student.id, allLectures);
-    return res.json(filtered);
-  }
-
-  res.json(allLectures.filter(l => l.is_public === 1));
+  res.json(filterAccessibleLectures(req.student?.id, allLectures));
 });
 
 // 学生的学习中心列表
@@ -556,10 +551,10 @@ router.put('/:id/public', adminAuth, (req, res) => {
 });
 
 // Get TOC for a specific chapter
-router.get('/toc/:lectureSlug/:chapterSlug', (req, res) => {
+router.get('/toc/:lectureSlug/:chapterSlug', optionalStudentAuth, (req, res) => {
   const { lectureSlug, chapterSlug } = req.params;
   const chapter = db.get(`
-    SELECT c.path, c.entry_file
+    SELECT c.path, c.entry_file, l.id, l.category_id, l.is_public
     FROM chapters c
     INNER JOIN lectures l ON l.id = c.lecture_id
     WHERE l.slug = ? AND c.slug = ?
@@ -567,6 +562,10 @@ router.get('/toc/:lectureSlug/:chapterSlug', (req, res) => {
 
   if (!chapter) {
     return res.status(404).json({ error: 'Chapter not found' });
+  }
+
+  if (!canAccessLecture(req.student?.id, chapter)) {
+    return res.status(403).json({ error: '无权限访问该讲义' });
   }
 
   const htmlPath = path.join(lecturesRoot, chapter.path, chapter.entry_file || 'index.html');

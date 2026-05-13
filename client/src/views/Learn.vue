@@ -105,7 +105,9 @@ function logout() {
 function firstChapterSrc(lecture) {
   const chapter = lecture.chapters?.[0]
   if (!chapter?.path) return ''
-  return `/lectures/${chapter.path}/${chapter.entry_file || 'index.html'}`
+  const token = localStorage.getItem('token')
+  const query = token ? `?access_token=${encodeURIComponent(token)}` : ''
+  return `/lectures/${chapter.path}/${chapter.entry_file || 'index.html'}${query}`
 }
 
 const groupedLectures = computed(() => {

@@ -2,6 +2,9 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const db = require('./db');
+const fs = require('fs');
+const { optionalStudentAuth } = require('./middleware/studentAuth');
+const { canAccessLecture } = require('./utils/permissions');
 
 const authRoutes = require('./routes/auth');
 const lectureRoutes = require('./routes/lecture');
@@ -26,7 +29,22 @@ app.use('/api/categories', categoryRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/knowledge', knowledgeRoutes);
 
-app.use('/lectures', express.static(path.join(__dirname, '../lectures'), { fallthrough: false }));
+const lecturesRoot = path.resolve(__dirname, '../lectures');
+app.get('/lectures/:lectureSlug/*', optionalStudentAuth, (req, res) => {
+  const lecture = db.get('SELECT id, slug, category_id, is_public FROM lectures WHERE slug = ?', [req.params.lectureSlug]);
+  if (!lecture) {
+    return res.status(404).send('Lecture not found');
+  }
+  if (!canAccessLecture(req.student?.id, lecture)) {
+    return res.status(403).send('Forbidden');
+  }
+
+  const requested = path.resolve(lecturesRoot, req.params.lectureSlug, req.params[0] || '');
+  if (!requested.startsWith(`${lecturesRoot}${path.sep}`) || !fs.existsSync(requested)) {
+    return res.status(404).send('File not found');
+  }
+  res.sendFile(requested);
+});
 
 const distPath = path.join(__dirname, '../client/dist');
 app.use(express.static(distPath, {

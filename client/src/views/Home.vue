@@ -313,9 +313,23 @@ const isLoggedIn = ref(!!localStorage.getItem('token'))
 const studentUsername = ref(localStorage.getItem('studentUsername') || '')
 const recentItems = ref([])
 
-const recentKey = 'edumanager:recentLectures'
+const recentKeyPrefix = 'edumanager:recentLectures'
 const loginTipVisible = ref(false)
 let loginTipTimer = null
+
+function currentUserKey() {
+  const token = localStorage.getItem('token')
+  if (!token) return 'guest'
+  try {
+    return JSON.parse(atob(token.split('.')[1])).id || localStorage.getItem('studentUsername') || 'student'
+  } catch {
+    return localStorage.getItem('studentUsername') || 'student'
+  }
+}
+
+function recentKey() {
+  return `${recentKeyPrefix}:${currentUserKey()}`
+}
 
 function updateLoginState() {
   isLoggedIn.value = !!localStorage.getItem('token')
@@ -352,14 +366,18 @@ function loadRecentItems() {
     return
   }
   try {
-    recentItems.value = JSON.parse(localStorage.getItem(recentKey) || '[]').slice(0, 3)
+    recentItems.value = JSON.parse(
+      localStorage.getItem(recentKey())
+      || localStorage.getItem(recentKeyPrefix)
+      || '[]'
+    ).slice(0, 3)
   } catch {
     recentItems.value = []
   }
 }
 
 function clearRecent() {
-  localStorage.removeItem(recentKey)
+  localStorage.removeItem(recentKey())
   recentItems.value = []
 }
 
@@ -377,7 +395,9 @@ function formatRecentTime(value) {
 function firstChapterSrc(lecture) {
   const chapter = lecture.chapters?.[0]
   if (!chapter?.path) return ''
-  return `/lectures/${chapter.path}/${chapter.entry_file || 'index.html'}`
+  const token = localStorage.getItem('token')
+  const query = token ? `?access_token=${encodeURIComponent(token)}` : ''
+  return `/lectures/${chapter.path}/${chapter.entry_file || 'index.html'}${query}`
 }
 
 function previewHint(doc) {
@@ -406,7 +426,7 @@ onMounted(async () => {
   const headers = token ? { Authorization: `Bearer ${token}` } : {}
   const [catRes, lecRes, knowledgeRes] = await Promise.all([
     axios.get('/api/categories'),
-    axios.get('/api/lectures', { params: token ? { all: 1 } : {}, headers }),
+    axios.get('/api/lectures', { headers }),
     axios.get('/api/knowledge', { params: { featured: 1 } })
   ])
   categories.value = catRes.data

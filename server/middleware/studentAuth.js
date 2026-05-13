@@ -4,7 +4,7 @@ const db = require('../db');
 const JWT_SECRET = process.env.JWT_SECRET || 'edumanager-default-secret';
 
 function studentAuth(req, res, next) {
-  const token = req.headers.authorization?.replace('Bearer ', '');
+  const token = req.headers.authorization?.replace('Bearer ', '') || req.query.access_token;
 
   if (!token) {
     return res.status(401).json({ error: '未登录' });
@@ -24,7 +24,7 @@ function studentAuth(req, res, next) {
 }
 
 function optionalStudentAuth(req, res, next) {
-  const token = req.headers.authorization?.replace('Bearer ', '');
+  const token = req.headers.authorization?.replace('Bearer ', '') || req.query.access_token;
   if (!token) {
     req.student = null;
     return next();

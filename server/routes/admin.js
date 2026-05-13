@@ -548,11 +548,23 @@ router.delete('/groups/:id/students/:sid', (req, res) => {
 
 // 设置班级可访问分类（全量替换）
 router.post('/groups/:id/categories', (req, res) => {
-  const categoryIds = Array.isArray(req.body.categoryIds) ? req.body.categoryIds.map(Number) : [];
+  const categoryIds = Array.isArray(req.body.categoryIds)
+    ? [...new Set(req.body.categoryIds.map(Number).filter(Boolean))]
+    : [];
 
   const group = db.get('SELECT id FROM groups WHERE id = ?', [req.params.id]);
   if (!group) {
     return res.status(404).json({ error: '班级不存在' });
+  }
+
+  if (categoryIds.length > 0) {
+    const placeholders = categoryIds.map(() => '?').join(',');
+    const existing = db.query(`SELECT id FROM categories WHERE id IN (${placeholders})`, categoryIds).map(item => item.id);
+    const existingSet = new Set(existing);
+    const invalid = categoryIds.filter(id => !existingSet.has(id));
+    if (invalid.length > 0) {
+      return res.status(400).json({ error: `分类不存在: ${invalid.join(', ')}` });
+    }
   }
 
   db.run('DELETE FROM group_category_permissions WHERE group_id = ?', [req.params.id]);

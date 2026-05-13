@@ -170,7 +170,31 @@ const activeAnchor = ref('')
 const readProgress = ref(0)
 const showToc = computed(() => !!toc.value && toc.value.modules.length > 0)
 const nativeLayout = computed(() => lecture.value?.layout_mode === 'native')
-const recentKey = 'edumanager:recentLectures'
+const recentKeyPrefix = 'edumanager:recentLectures'
+
+function currentUserKey() {
+  const token = localStorage.getItem('token')
+  if (!token) return 'guest'
+  try {
+    return JSON.parse(atob(token.split('.')[1])).id || localStorage.getItem('studentUsername') || 'student'
+  } catch {
+    return localStorage.getItem('studentUsername') || 'student'
+  }
+}
+
+function recentKey() {
+  return `${recentKeyPrefix}:${currentUserKey()}`
+}
+
+function authHeaders() {
+  const token = localStorage.getItem('token')
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+function accessQuery() {
+  const token = localStorage.getItem('token')
+  return token ? `?access_token=${encodeURIComponent(token)}` : ''
+}
 
 const currentPath = computed(() => {
   if (!lecture.value || !currentChapter.value) return null
@@ -181,7 +205,7 @@ const currentPath = computed(() => {
 const currentSrc = computed(() => {
   const chapter = chapters.value.find(item => item.slug === currentChapter.value)
   if (!chapter?.path) return ''
-  return `/lectures/${chapter.path}/${chapter.entry_file || 'index.html'}`
+  return `/lectures/${chapter.path}/${chapter.entry_file || 'index.html'}${accessQuery()}`
 })
 
 function syncViewportMode() {
@@ -215,14 +239,31 @@ function saveRecentLecture() {
     updatedAt: Date.now()
   }
   try {
-    const existing = JSON.parse(localStorage.getItem(recentKey) || '[]')
+    const existing = JSON.parse(localStorage.getItem(recentKey()) || '[]')
     const next = [
       item,
       ...existing.filter(entry => `${entry.lectureSlug}/${entry.chapterSlug}` !== `${item.lectureSlug}/${item.chapterSlug}`)
     ].slice(0, 6)
-    localStorage.setItem(recentKey, JSON.stringify(next))
+    localStorage.setItem(recentKey(), JSON.stringify(next))
   } catch {
-    localStorage.setItem(recentKey, JSON.stringify([item]))
+    localStorage.setItem(recentKey(), JSON.stringify([item]))
+  }
+}
+
+function restoreSavedProgress() {
+  if (!lecture.value || !currentChapter.value) return
+  try {
+    const items = JSON.parse(
+      localStorage.getItem(recentKey())
+      || localStorage.getItem(recentKeyPrefix)
+      || '[]'
+    )
+    const item = items.find(entry =>
+      entry.lectureSlug === slug.value && entry.chapterSlug === currentChapter.value
+    )
+    readProgress.value = Math.max(0, Math.min(100, Math.round(Number(item?.progress) || 0)))
+  } catch {
+    readProgress.value = 0
   }
 }
 
@@ -238,14 +279,15 @@ async function loadLecture() {
   readProgress.value = 0
   iframeError.value = false
   
-  const res = await axios.get('/api/lectures')
+  const res = await axios.get('/api/lectures', { headers: authHeaders() })
   lecture.value = res.data.find(l => l.slug === slug.value)
   chapters.value = lecture.value?.chapters || []
+  restoreSavedProgress()
   
   // Try to load TOC for current chapter
   if (currentPath.value && !nativeLayout.value) {
     try {
-      const tocRes = await axios.get(`/api/lectures/toc/${slug.value}/${currentChapter.value}`)
+      const tocRes = await axios.get(`/api/lectures/toc/${slug.value}/${currentChapter.value}`, { headers: authHeaders() })
       toc.value = tocRes.data
     } catch {
       toc.value = null
@@ -253,7 +295,6 @@ async function loadLecture() {
   }
   
   loading.value = false
-  saveRecentLecture()
 }
 
 function onIframeLoad() {
@@ -271,12 +312,13 @@ function onIframeLoad() {
     }
   }
   
-  if (nativeLayout.value || !showToc.value || !viewerFrame.value) return
+  if (!viewerFrame.value) return
   
   const iframe = viewerFrame.value
   try {
     const doc = iframe.contentDocument
     if (!doc) return
+    const savedProgress = readProgress.value
     
     // Inject scroll tracker into iframe
     const script = doc.createElement('script')
@@ -284,6 +326,7 @@ function onIframeLoad() {
       (function() {
         let ticking = false;
         const headings = document.querySelectorAll('h1[id], h2[id], h3[id], h4[id]');
+        const initialProgress = ${JSON.stringify(savedProgress)};
         
         function sendReadingState() {
           const scrollTop = window.scrollY || document.documentElement.scrollTop;
@@ -302,6 +345,16 @@ function onIframeLoad() {
           window.parent.postMessage({ type: 'toc-active', anchor: active }, '*');
           window.parent.postMessage({ type: 'reading-progress', progress: Math.min(100, (scrollTop / maxScroll) * 100) }, '*');
         }
+
+        function restoreProgress() {
+          if (!initialProgress || initialProgress <= 0) {
+            sendReadingState();
+            return;
+          }
+          const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+          window.scrollTo(0, maxScroll * Math.min(100, initialProgress) / 100);
+          setTimeout(sendReadingState, 80);
+        }
         
         window.addEventListener('scroll', function() {
           if (!ticking) {
@@ -313,8 +366,8 @@ function onIframeLoad() {
           }
         });
         
-        // Initial call
-        sendReadingState();
+        // Restore saved progress after layout settles.
+        setTimeout(restoreProgress, 120);
       })();
     `
     doc.head.appendChild(script)
