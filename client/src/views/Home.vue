@@ -194,6 +194,7 @@
               <h3>{{ doc.title }}</h3>
               <div v-if="doc.summary" class="summary-markdown" v-html="renderMd(doc.summary)"></div>
               <p v-else>管理员暂未填写简介。</p>
+              <button v-if="doc.summary" class="detail-btn" @click="openSummaryModal(doc)">查看详情 ›</button>
               <a :href="doc.file_url || doc.url" target="_blank" rel="noopener noreferrer" class="open-link">
                 {{ doc.file_type ? '打开文档' : '打开飞书文档' }}
               </a>
@@ -201,6 +202,21 @@
           </article>
         </div>
       </section>
+
+      <!-- Summary Modal -->
+      <Teleport to="body">
+        <Transition name="modal">
+          <div v-if="summaryModal.visible" class="modal-overlay" @click.self="closeSummaryModal" @keydown.escape="closeSummaryModal">
+            <div class="modal-card" role="dialog" aria-modal="true">
+              <div class="modal-header">
+                <h3>{{ summaryModal.title }}</h3>
+                <button class="modal-close" @click="closeSummaryModal" aria-label="关闭">✕</button>
+              </div>
+              <div class="modal-body markdown-body" v-html="summaryModal.html"></div>
+            </div>
+          </div>
+        </Transition>
+      </Teleport>
 
       <!-- Category Filters -->
       <div class="filters">
@@ -300,7 +316,7 @@
 </template>
 
 <script setup>
-import { defineAsyncComponent, ref, computed, onMounted, onUnmounted } from 'vue'
+import { defineAsyncComponent, reactive, ref, computed, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 import MarkdownIt from 'markdown-it'
 
@@ -308,6 +324,24 @@ const md = new MarkdownIt({ html: false })
 
 function renderMd(text) {
   return text ? md.render(text) : ''
+}
+
+const summaryModal = reactive({
+  visible: false,
+  title: '',
+  html: ''
+})
+
+function openSummaryModal(doc) {
+  summaryModal.title = doc.title
+  summaryModal.html = md.render(doc.summary || '')
+  summaryModal.visible = true
+  document.body.style.overflow = 'hidden'
+}
+
+function closeSummaryModal() {
+  summaryModal.visible = false
+  document.body.style.overflow = ''
 }
 
 const MarkdownPreview = defineAsyncComponent(() => import('../components/MarkdownPreview.vue'))
@@ -1000,7 +1034,8 @@ onUnmounted(() => {
 
 .summary-markdown {
   color: var(--color-ink-secondary);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
+  line-height: 1.55;
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
@@ -1009,25 +1044,40 @@ onUnmounted(() => {
 
 .summary-markdown :deep(p) {
   color: var(--color-ink-secondary);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   margin: 0;
 }
 
 .summary-markdown :deep(p + p) {
-  margin-top: var(--space-2);
+  margin-top: 4px;
 }
 
 .summary-markdown :deep(ul),
 .summary-markdown :deep(ol) {
   margin: 0;
-  padding-left: var(--space-5);
+  padding-left: 16px;
 }
 
 .summary-markdown :deep(code) {
-  padding: 1px 5px;
-  border-radius: 4px;
+  padding: 1px 4px;
+  border-radius: 3px;
   background: var(--color-bg);
+  font-size: 11px;
+}
+
+.detail-btn {
+  justify-self: start;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-primary);
   font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.detail-btn:hover {
+  opacity: 0.7;
 }
 
 .open-link {
@@ -1351,5 +1401,157 @@ onUnmounted(() => {
   .lecture-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* Modal */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(4px);
+}
+
+.modal-card {
+  background: var(--color-surface);
+  border-radius: 12px;
+  width: 90vw;
+  max-width: 640px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modal-close {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: var(--color-bg);
+  border-radius: 8px;
+  font-size: 14px;
+  color: var(--color-ink-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+.modal-close:hover {
+  background: var(--color-border);
+}
+
+.modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  color: var(--color-ink);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.modal-body :deep(h1),
+.modal-body :deep(h2),
+.modal-body :deep(h3) {
+  margin: 0 0 12px;
+  color: var(--color-ink);
+}
+.modal-body :deep(h1) { font-size: 22px; }
+.modal-body :deep(h2) { font-size: 18px; margin-top: 20px; }
+.modal-body :deep(h3) { font-size: 16px; margin-top: 16px; }
+
+.modal-body :deep(p) {
+  margin: 0 0 12px;
+}
+
+.modal-body :deep(ul),
+.modal-body :deep(ol) {
+  margin: 0 0 12px;
+  padding-left: 24px;
+}
+
+.modal-body :deep(code) {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--color-bg);
+  font-size: 13px;
+}
+
+.modal-body :deep(pre) {
+  overflow: auto;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--color-bg);
+  margin: 0 0 12px;
+}
+
+.modal-body :deep(pre code) {
+  padding: 0;
+  background: transparent;
+}
+
+.modal-body :deep(blockquote) {
+  margin: 0 0 12px;
+  padding-left: 12px;
+  border-left: 3px solid var(--color-border);
+  color: var(--color-ink-secondary);
+}
+
+.modal-body :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 12px;
+}
+.modal-body :deep(th),
+.modal-body :deep(td) {
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  text-align: left;
+}
+.modal-body :deep(th) {
+  background: var(--color-bg);
+  font-weight: 600;
+}
+
+/* Modal transitions */
+.modal-enter-active,
+.modal-leave-active {
+  transition: opacity 0.2s ease;
+}
+.modal-enter-active .modal-card,
+.modal-leave-active .modal-card {
+  transition: transform 0.2s ease;
+}
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0;
+}
+.modal-enter-from .modal-card {
+  transform: scale(0.95) translateY(10px);
+}
+.modal-leave-to .modal-card {
+  transform: scale(0.95) translateY(10px);
 }
 </style>
