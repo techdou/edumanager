@@ -192,7 +192,8 @@
             <div class="knowledge-body">
               <span class="lecture-category">{{ doc.category_name || '知识文档' }}</span>
               <h3>{{ doc.title }}</h3>
-              <p>{{ doc.summary || '管理员暂未填写简介。' }}</p>
+              <div v-if="doc.summary" class="summary-markdown" v-html="renderMd(doc.summary)"></div>
+              <p v-else>管理员暂未填写简介。</p>
               <a :href="doc.file_url || doc.url" target="_blank" rel="noopener noreferrer" class="open-link">
                 {{ doc.file_type ? '打开文档' : '打开飞书文档' }}
               </a>
@@ -301,6 +302,13 @@
 <script setup>
 import { defineAsyncComponent, ref, computed, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
+import MarkdownIt from 'markdown-it'
+
+const md = new MarkdownIt({ html: false })
+
+function renderMd(text) {
+  return text ? md.render(text) : ''
+}
 
 const MarkdownPreview = defineAsyncComponent(() => import('../components/MarkdownPreview.vue'))
 
@@ -955,6 +963,7 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: var(--space-5);
+  align-items: stretch;
 }
 
 .knowledge-card {
@@ -962,12 +971,15 @@ onUnmounted(() => {
   border: 1px solid var(--color-border);
   border-radius: 8px;
   background: var(--color-surface);
+  display: flex;
+  flex-direction: column;
 }
 
 .knowledge-body {
   display: grid;
   gap: var(--space-3);
   padding: var(--space-5);
+  flex: 1;
 }
 
 .knowledge-body h3 {
@@ -980,6 +992,42 @@ onUnmounted(() => {
 .knowledge-body p {
   color: var(--color-ink-secondary);
   font-size: var(--text-sm);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.summary-markdown {
+  color: var(--color-ink-secondary);
+  font-size: var(--text-sm);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.summary-markdown :deep(p) {
+  color: var(--color-ink-secondary);
+  font-size: var(--text-sm);
+  margin: 0;
+}
+
+.summary-markdown :deep(p + p) {
+  margin-top: var(--space-2);
+}
+
+.summary-markdown :deep(ul),
+.summary-markdown :deep(ol) {
+  margin: 0;
+  padding-left: var(--space-5);
+}
+
+.summary-markdown :deep(code) {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--color-bg);
+  font-size: var(--text-xs);
 }
 
 .open-link {
@@ -1173,6 +1221,7 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: var(--space-6);
+  align-items: stretch;
 }
 
 .lecture-card {
@@ -1181,6 +1230,10 @@ onUnmounted(() => {
   gap: var(--space-5);
   overflow: hidden;
   border-radius: 8px;
+}
+
+.lecture-card .resource-preview {
+  flex-shrink: 0;
 }
 
 .lecture-header {
@@ -1219,6 +1272,20 @@ onUnmounted(() => {
   flex-wrap: wrap;
   gap: var(--space-2);
   padding: 0 var(--space-1);
+  max-height: 120px;
+  overflow: hidden;
+  position: relative;
+}
+
+.chapters::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 48px;
+  background: linear-gradient(to bottom, transparent, var(--color-surface));
+  pointer-events: none;
 }
 
 .chapter-link {
