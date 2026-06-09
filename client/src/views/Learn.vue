@@ -66,7 +66,7 @@
                   <router-link
                     v-for="chapter in lecture.chapters"
                     :key="chapter.id"
-                    :to="`/lecture/${lecture.slug}/${chapter.slug}`"
+                    :to="lecture.slug === chapter.slug ? `/lecture/${lecture.slug}` : `/lecture/${lecture.slug}/${chapter.slug}`"
                     class="chapter-link"
                   >
                     <span class="chapter-dot"></span>
