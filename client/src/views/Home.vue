@@ -140,7 +140,7 @@
           <router-link
             v-for="item in recentItems"
             :key="`${item.lectureSlug}-${item.chapterSlug}`"
-            :to="`/lecture/${item.lectureSlug}/${item.chapterSlug}`"
+            :to="item.lectureSlug === item.chapterSlug ? `/lecture/${item.lectureSlug}` : `/lecture/${item.lectureSlug}/${item.chapterSlug}`"
             class="recent-card"
           >
             <div>
@@ -390,7 +390,11 @@ function goLecture(lectureSlug, chapterSlug) {
     showLoginTip()
     return
   }
-  window.location.href = `/lecture/${lectureSlug}/${chapterSlug}`
+  if (lectureSlug === chapterSlug) {
+    window.location.href = `/lecture/${lectureSlug}`
+  } else {
+    window.location.href = `/lecture/${lectureSlug}/${chapterSlug}`
+  }
 }
 
 function logout() {
