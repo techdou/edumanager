@@ -565,7 +565,182 @@ router.put('/:id/public', adminAuth, (req, res) => {
   res.json(getPublicLecture(updated));
 });
 
-// Get TOC for a specific chapter
+// 更新讲义基本信息
+router.put('/:id', adminAuth, (req, res, next) => {
+  upload.fields([
+    { name: 'cover', maxCount: 1 }
+  ])(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: '文件大小超过 200MB 限制' });
+      }
+      return res.status(400).json({ error: '文件上传失败: ' + err.message });
+    }
+    next();
+  });
+}, (req, res) => {
+  const { id } = req.params;
+  const title = String(req.body.title || '').trim();
+  const slug = String(req.body.slug || '').trim();
+  const categoryId = req.body.categoryId ? Number(req.body.categoryId) : null;
+  const layoutMode = req.body.layoutMode === 'native' ? 'native' : 'system';
+  const isPublic = req.body.isPublic === '1' || req.body.isPublic === true ? 1 : 0;
+  const cover = req.files?.cover?.[0];
+
+  const lecture = db.get('SELECT * FROM lectures WHERE id = ?', [id]);
+  if (!lecture) {
+    cleanupUpload(cover);
+    return res.status(404).json({ error: '讲义不存在' });
+  }
+
+  if (!title) {
+    cleanupUpload(cover);
+    return res.status(400).json({ error: '标题不能为空' });
+  }
+
+  // 如果修改了 slug，需要验证并重命名目录
+  let oldSlug = lecture.slug;
+  let newSlug = null;
+  if (slug && slug !== oldSlug) {
+    if (!isValidSlug(slug)) {
+      cleanupUpload(cover);
+      return res.status(400).json({ error: 'URL 标识只能包含英文、数字、下划线和短横线，长度 2-81 位' });
+    }
+    const existing = db.get('SELECT id FROM lectures WHERE slug = ? AND id != ?', [slug, id]);
+    if (existing) {
+      cleanupUpload(cover);
+      return res.status(400).json({ error: 'URL 标识已存在' });
+    }
+    newSlug = slug;
+  }
+
+  if (categoryId) {
+    const category = db.get('SELECT id FROM categories WHERE id = ?', [categoryId]);
+    if (!category) {
+      cleanupUpload(cover);
+      return res.status(400).json({ error: '分类不存在' });
+    }
+  }
+
+  if (!isAllowedCover(cover)) {
+    cleanupUpload(cover);
+    return res.status(400).json({ error: '封面图仅支持 JPG、PNG、WebP' });
+  }
+
+  let coverPath = lecture.cover_path;
+  try {
+    // 处理新封面上传
+    if (cover) {
+      // 删除旧封面
+      if (lecture.cover_path) {
+        const oldCoverPath = safeCoverPath(lecture.cover_path);
+        if (fs.existsSync(oldCoverPath)) fs.unlinkSync(oldCoverPath);
+      }
+      coverPath = saveCover(cover);
+    }
+
+    // 如果修改了 slug，重命名讲义目录
+    if (newSlug) {
+      const oldPath = safeLecturePath(oldSlug);
+      const newPath = safeLecturePath(newSlug);
+      if (fs.existsSync(oldPath) && !fs.existsSync(newPath)) {
+        fs.renameSync(oldPath, newPath);
+      }
+      // 更新章节的路径
+      const chapters = db.query('SELECT id, path FROM chapters WHERE lecture_id = ?', [id]);
+      chapters.forEach(chapter => {
+        const newChapterPath = chapter.path.replace(new RegExp('^' + oldSlug), newSlug);
+        db.run('UPDATE chapters SET path = ? WHERE id = ?', [newChapterPath, chapter.id]);
+      });
+    }
+
+    // 更新数据库
+    const updateFields = [];
+    const updateValues = [];
+    if (title) { updateFields.push('title = ?'); updateValues.push(title); }
+    if (newSlug) { updateFields.push('slug = ?'); updateValues.push(newSlug); }
+    if (categoryId) { updateFields.push('category_id = ?'); updateValues.push(categoryId); }
+    if (coverPath !== lecture.cover_path) { updateFields.push('cover_path = ?'); updateValues.push(coverPath); }
+    updateFields.push('layout_mode = ?'); updateValues.push(layoutMode);
+    updateFields.push('is_public = ?'); updateValues.push(isPublic);
+    updateValues.push(id);
+
+    db.run(`UPDATE lectures SET ${updateFields.join(', ')} WHERE id = ?`, updateValues);
+
+    const updated = db.get(`
+      SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.layout_mode, l.is_public, l.created_at,
+             c.name as category_name
+      FROM lectures l
+      LEFT JOIN categories c ON l.category_id = c.id
+      WHERE l.id = ?
+    `, [id]);
+    updated.chapters = db.query(`
+      SELECT id, lecture_id, title, slug, path, entry_file, order_index
+      FROM chapters WHERE lecture_id = ? ORDER BY order_index
+    `, [id]);
+    res.json(getPublicLecture(updated));
+  } catch (err) {
+    console.error('更新讲义错误:', err);
+    cleanupUpload(cover);
+    if (coverPath && coverPath !== lecture.cover_path) {
+      const savedCoverPath = safeCoverPath(coverPath);
+      if (fs.existsSync(savedCoverPath)) fs.unlinkSync(savedCoverPath);
+    }
+    res.status(500).json({ error: '更新失败: ' + err.message });
+  }
+});
+
+// 更新章节信息
+router.put('/:id/chapters', adminAuth, (req, res) => {
+  const { id } = req.params;
+  const chapters = req.body.chapters;
+
+  const lecture = db.get('SELECT * FROM lectures WHERE id = ?', [id]);
+  if (!lecture) {
+    return res.status(404).json({ error: '讲义不存在' });
+  }
+
+  if (!Array.isArray(chapters) || chapters.length === 0) {
+    return res.status(400).json({ error: '章节数据无效' });
+  }
+
+  try {
+    // 验证所有章节 ID 是否属于该讲义
+    const existingChapters = db.query('SELECT id FROM chapters WHERE lecture_id = ?', [id]);
+    const existingIds = new Set(existingChapters.map(c => c.id));
+
+    for (const chapter of chapters) {
+      if (!existingIds.has(chapter.id)) {
+        return res.status(400).json({ error: '章节 ID 不属于该讲义' });
+      }
+    }
+
+    // 更新每个章节的标题和排序
+    chapters.forEach((chapter, index) => {
+      const title = String(chapter.title || '').trim();
+      if (!title) {
+        throw new Error('章节标题不能为空');
+      }
+      db.run('UPDATE chapters SET title = ?, order_index = ? WHERE id = ?', [title, index, chapter.id]);
+    });
+
+    const updated = db.get(`
+      SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.layout_mode, l.is_public, l.created_at,
+             c.name as category_name
+      FROM lectures l
+      LEFT JOIN categories c ON l.category_id = c.id
+      WHERE l.id = ?
+    `, [id]);
+    updated.chapters = db.query(`
+      SELECT id, lecture_id, title, slug, path, entry_file, order_index
+      FROM chapters WHERE lecture_id = ? ORDER BY order_index
+    `, [id]);
+    res.json(getPublicLecture(updated));
+  } catch (err) {
+    console.error('更新章节错误:', err);
+    res.status(500).json({ error: '更新章节失败: ' + err.message });
+  }
+});
 router.get('/toc/:lectureSlug/:chapterSlug', optionalStudentAuth, (req, res) => {
   const { lectureSlug, chapterSlug } = req.params;
   const chapter = db.get(`

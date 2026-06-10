@@ -84,6 +84,7 @@
               <td>
                 <div class="actions">
                   <router-link :to="`/lecture/${lecture.slug}`">查看</router-link>
+                  <button type="button" @click="openEdit(lecture)">编辑</button>
                   <button type="button" class="danger" @click="deleteLecture(lecture)">删除</button>
                 </div>
               </td>
@@ -92,12 +93,22 @@
         </table>
       </div>
     </section>
+
+    <!-- 编辑弹窗 -->
+    <EditLectureModal
+      :visible="showEditModal"
+      :lecture="editingLecture"
+      :categories="categories"
+      @close="showEditModal = false; editingLecture = null"
+      @saved="handleEditSaved"
+    />
   </section>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import axios from 'axios'
+import EditLectureModal from '../../components/EditLectureModal.vue'
 
 const lectures = ref([])
 const categories = ref([])
@@ -109,6 +120,8 @@ const filters = reactive({
   from: '',
   to: ''
 })
+const editingLecture = ref(null)
+const showEditModal = ref(false)
 
 const totalChapters = computed(() => {
   return lectures.value.reduce((sum, lecture) => sum + (lecture.chapters?.length || 0), 0)
@@ -211,6 +224,17 @@ function resetFilters() {
 function formatDate(value) {
   if (!value) return '-'
   return new Date(String(value).replace(' ', 'T')).toLocaleString('zh-CN', { hour12: false })
+}
+
+function openEdit(lecture) {
+  editingLecture.value = lecture
+  showEditModal.value = true
+}
+
+function handleEditSaved(updatedLecture) {
+  lectures.value = lectures.value.map(item => item.id === updatedLecture.id ? updatedLecture : item)
+  showEditModal.value = false
+  editingLecture.value = null
 }
 </script>
 
