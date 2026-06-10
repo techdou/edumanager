@@ -66,6 +66,52 @@
           </div>
         </div>
 
+        <!-- 内容重新上传 -->
+        <div class="form-section">
+          <h3>内容重新上传（可选）</h3>
+          <div class="form-group">
+            <div class="file-upload" :class="{ active: contentFile }">
+              <input type="file" @change="handleContentFile" accept=".zip,.html,.htm" />
+              <span v-if="contentFile">
+                <strong>{{ contentFile.name }}</strong>
+                <small>{{ formatSize(contentFile.size) }}</small>
+              </span>
+              <span v-else>
+                点击选择 ZIP 或单个 HTML 文件替换现有内容
+                <br><small>替换后章节将重新生成</small>
+              </span>
+            </div>
+          </div>
+          
+          <!-- 预检结果 -->
+          <section v-if="precheckLoading || zipCheck" class="precheck-panel">
+            <div class="precheck-header">
+              <strong>讲义结构预检</strong>
+              <span v-if="precheckLoading">检查中...</span>
+              <span v-else-if="zipCheck">{{ zipCheck.mode === 'multi-chapter' ? '多章节' : '单页讲义' }}</span>
+            </div>
+            <template v-if="zipCheck">
+              <div class="precheck-stats">
+                <span>{{ zipCheck.entryCount }} 个条目</span>
+                <span>{{ zipCheck.htmlCount }} 个 HTML</span>
+                <span>{{ zipCheck.chapters.length || 1 }} 个章节候选</span>
+              </div>
+              <div v-if="zipCheck.missingIndex.length > 0" class="precheck-warning">
+                <strong>缺少 index.html</strong>
+                <span>{{ zipCheck.missingIndex.map(item => item.name).join('、') }}</span>
+              </div>
+              <ul v-if="zipCheck.warnings.length > 0" class="precheck-list">
+                <li v-for="item in zipCheck.warnings" :key="item">{{ item }}</li>
+              </ul>
+              <p v-else class="precheck-ok">结构看起来很好，可以替换。</p>
+            </template>
+          </section>
+          
+          <p v-if="contentFile" class="hint" style="color: #b42318;">
+            ⚠️ 替换后现有章节将全部重建，学生端链接可能变化
+          </p>
+        </div>
+
         <!-- 章节管理 -->
         <div class="form-section">
           <h3>章节管理（拖拽排序）</h3>
@@ -122,6 +168,9 @@ const form = ref({
   chapters: []
 })
 const coverFile = ref(null)
+const contentFile = ref(null)
+const precheckLoading = ref(false)
+const zipCheck = ref(null)
 const error = ref('')
 const success = ref('')
 const saving = ref(false)
@@ -139,6 +188,9 @@ watch(() => props.lecture, (lecture) => {
       chapters: (lecture.chapters || []).map(c => ({ ...c }))
     }
     coverFile.value = null
+    contentFile.value = null
+    precheckLoading.value = false
+    zipCheck.value = null
     error.value = ''
     success.value = ''
   }
@@ -154,6 +206,40 @@ function handleCover(e) {
   }
   coverFile.value = file
   error.value = ''
+}
+
+function handleContentFile(e) {
+  const file = e.target.files[0]
+  if (!file) return
+  if (!/\.(zip|html?)$/i.test(file.name)) {
+    error.value = '仅支持 ZIP 或 HTML 文件'
+    contentFile.value = null
+    return
+  }
+  contentFile.value = file
+  error.value = ''
+  zipCheck.value = null
+  
+  // 预检
+  precheckLoading.value = true
+  const formData = new FormData()
+  formData.append('file', file)
+  const token = localStorage.getItem('adminToken')
+  axios.post('/api/lectures/precheck', formData, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {}
+  }).then(res => {
+    zipCheck.value = res.data
+  }).catch(e => {
+    error.value = e.response?.data?.error || '预检失败'
+  }).finally(() => {
+    precheckLoading.value = false
+  })
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + ' KB'
+  return Math.round(bytes / (1024 * 1024) * 10) / 10 + ' MB'
 }
 
 function handleDragStart(e, index) {
@@ -206,21 +292,24 @@ async function save() {
     formData.append('layoutMode', form.value.layoutMode)
     formData.append('isPublic', form.value.isPublic ? '1' : '0')
     if (coverFile.value) formData.append('cover', coverFile.value)
+    if (contentFile.value) formData.append('file', contentFile.value)
 
     const res = await axios.put(`/api/lectures/${props.lecture.id}`, formData, {
       headers: { ...headers, 'Content-Type': 'multipart/form-data' }
     })
 
-    // 2. 更新章节（如果有变动）
-    const chaptersChanged = JSON.stringify(form.value.chapters.map(c => ({ id: c.id, title: c.title }))) !==
-                           JSON.stringify((props.lecture.chapters || []).map(c => ({ id: c.id, title: c.title })))
-    const orderChanged = JSON.stringify(form.value.chapters.map(c => c.id)) !==
-                        JSON.stringify((props.lecture.chapters || []).map(c => c.id))
+    // 2. 更新章节（如果内容没有重新上传，且有变动）
+    if (!contentFile.value) {
+      const chaptersChanged = JSON.stringify(form.value.chapters.map(c => ({ id: c.id, title: c.title }))) !==
+                             JSON.stringify((props.lecture.chapters || []).map(c => ({ id: c.id, title: c.title })))
+      const orderChanged = JSON.stringify(form.value.chapters.map(c => c.id)) !==
+                          JSON.stringify((props.lecture.chapters || []).map(c => c.id))
 
-    if (chaptersChanged || orderChanged) {
-      await axios.put(`/api/lectures/${props.lecture.id}/chapters`, {
-        chapters: form.value.chapters.map((c, i) => ({ id: c.id, title: c.title, order: i }))
-      }, { headers })
+      if (chaptersChanged || orderChanged) {
+        await axios.put(`/api/lectures/${props.lecture.id}/chapters`, {
+          chapters: form.value.chapters.map((c, i) => ({ id: c.id, title: c.title, order: i }))
+        }, { headers })
+      }
     }
 
     success.value = '保存成功！'
@@ -558,5 +647,82 @@ function close() {
 
 .btn-primary:hover:not(:disabled) {
   background: #1d5bd1;
+}
+
+.precheck-panel {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+  margin-top: 8px;
+}
+
+.precheck-header,
+.precheck-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  justify-content: space-between;
+}
+
+.precheck-header strong {
+  color: var(--color-ink);
+}
+
+.precheck-header span,
+.precheck-stats span,
+.precheck-list,
+.precheck-ok {
+  color: var(--color-ink-secondary);
+  font-size: var(--text-xs);
+}
+
+.precheck-stats span {
+  padding: var(--space-1) var(--space-2);
+  border-radius: 999px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  font-weight: 700;
+}
+
+.precheck-warning {
+  display: grid;
+  gap: 3px;
+  padding: var(--space-3);
+  border: 1px solid #ffd4d0;
+  border-radius: 8px;
+  background: #fff4f2;
+  color: #b42318;
+  font-size: var(--text-xs);
+}
+
+.precheck-list {
+  display: grid;
+  gap: var(--space-1);
+  padding-left: var(--space-4);
+}
+
+.precheck-ok {
+  color: var(--color-success);
+  font-weight: 700;
+}
+
+.file-upload.active {
+  border-color: #2f6fed;
+  background: #f0f5ff;
+}
+
+.file-upload.active strong {
+  color: #172033;
+  display: block;
+  margin-bottom: 2px;
+}
+
+.file-upload.active small {
+  color: #7a8494;
+  font-size: 12px;
 }
 </style>

@@ -565,9 +565,10 @@ router.put('/:id/public', adminAuth, (req, res) => {
   res.json(getPublicLecture(updated));
 });
 
-// 更新讲义基本信息
+// 更新讲义基本信息（支持封面+内容重新上传）
 router.put('/:id', adminAuth, (req, res, next) => {
   upload.fields([
+    { name: 'file', maxCount: 1 },
     { name: 'cover', maxCount: 1 }
   ])(req, res, (err) => {
     if (err) {
@@ -586,29 +587,33 @@ router.put('/:id', adminAuth, (req, res, next) => {
   const layoutMode = req.body.layoutMode === 'native' ? 'native' : 'system';
   const isPublic = req.body.isPublic === '1' || req.body.isPublic === true ? 1 : 0;
   const cover = req.files?.cover?.[0];
+  const file = req.files?.file?.[0]; // 重新上传的内容文件
 
   const lecture = db.get('SELECT * FROM lectures WHERE id = ?', [id]);
   if (!lecture) {
     cleanupUpload(cover);
+    cleanupUpload(file);
     return res.status(404).json({ error: '讲义不存在' });
   }
 
   if (!title) {
     cleanupUpload(cover);
+    cleanupUpload(file);
     return res.status(400).json({ error: '标题不能为空' });
   }
 
-  // 如果修改了 slug，需要验证并重命名目录
   let oldSlug = lecture.slug;
   let newSlug = null;
   if (slug && slug !== oldSlug) {
     if (!isValidSlug(slug)) {
       cleanupUpload(cover);
+      cleanupUpload(file);
       return res.status(400).json({ error: 'URL 标识只能包含英文、数字、下划线和短横线，长度 2-81 位' });
     }
     const existing = db.get('SELECT id FROM lectures WHERE slug = ? AND id != ?', [slug, id]);
     if (existing) {
       cleanupUpload(cover);
+      cleanupUpload(file);
       return res.status(400).json({ error: 'URL 标识已存在' });
     }
     newSlug = slug;
@@ -618,12 +623,14 @@ router.put('/:id', adminAuth, (req, res, next) => {
     const category = db.get('SELECT id FROM categories WHERE id = ?', [categoryId]);
     if (!category) {
       cleanupUpload(cover);
+      cleanupUpload(file);
       return res.status(400).json({ error: '分类不存在' });
     }
   }
 
   if (!isAllowedCover(cover)) {
     cleanupUpload(cover);
+    cleanupUpload(file);
     return res.status(400).json({ error: '封面图仅支持 JPG、PNG、WebP' });
   }
 
@@ -631,7 +638,6 @@ router.put('/:id', adminAuth, (req, res, next) => {
   try {
     // 处理新封面上传
     if (cover) {
-      // 删除旧封面
       if (lecture.cover_path) {
         const oldCoverPath = safeCoverPath(lecture.cover_path);
         if (fs.existsSync(oldCoverPath)) fs.unlinkSync(oldCoverPath);
@@ -646,12 +652,61 @@ router.put('/:id', adminAuth, (req, res, next) => {
       if (fs.existsSync(oldPath) && !fs.existsSync(newPath)) {
         fs.renameSync(oldPath, newPath);
       }
-      // 更新章节的路径
       const chapters = db.query('SELECT id, path FROM chapters WHERE lecture_id = ?', [id]);
       chapters.forEach(chapter => {
         const newChapterPath = chapter.path.replace(new RegExp('^' + oldSlug), newSlug);
         db.run('UPDATE chapters SET path = ? WHERE id = ?', [newChapterPath, chapter.id]);
       });
+    }
+
+    // 处理内容文件重新上传
+    let chaptersChanged = false;
+    if (file) {
+      const isZip = file.originalname.toLowerCase().endsWith('.zip');
+      const isSingleHtml = isHtmlFile(file.originalname);
+      if (!isZip && !isSingleHtml) {
+        cleanupUpload(file);
+        return res.status(400).json({ error: '仅支持 ZIP 或 HTML 文件' });
+      }
+
+      const activeSlug = newSlug || oldSlug;
+      const extractPath = safeLecturePath(activeSlug);
+
+      // 清理旧目录并重建
+      if (fs.existsSync(extractPath)) {
+        fs.rmSync(extractPath, { recursive: true, force: true });
+      }
+      fs.mkdirSync(extractPath, { recursive: true });
+
+      if (isSingleHtml) {
+        fs.renameSync(file.path, path.join(extractPath, file.originalname));
+      } else {
+        try {
+          execFileSync('unar', ['-o', extractPath, file.path], { encoding: 'utf-8' });
+        } catch (e) {
+          execFileSync('unzip', ['-o', file.path, '-d', extractPath], { encoding: 'utf-8' });
+        }
+      }
+      cleanupUpload(file);
+
+      // 删除旧章节，重建
+      db.run('DELETE FROM chapters WHERE lecture_id = ?', [id]);
+      const chapterCandidates = buildChapterCandidates(extractPath);
+      if (chapterCandidates.length === 0) {
+        throw new Error('未找到可用 HTML 文件');
+      }
+      const usedSlugs = new Set();
+      chapterCandidates.forEach((chapter, index) => {
+        const chapterSlug = chapterCandidates.length === 1
+          ? activeSlug
+          : chapterSlugFromName(chapter.slugSource, usedSlugs);
+        const chapterPath = chapter.path ? `${activeSlug}/${chapter.path}` : activeSlug;
+        db.run(`
+          INSERT INTO chapters (lecture_id, title, slug, path, entry_file, order_index) 
+          VALUES (?, ?, ?, ?, ?, ?)
+        `, [id, chapter.title || title, chapterSlug, chapterPath, chapter.entryFile, index]);
+      });
+      chaptersChanged = true;
     }
 
     // 更新数据库
@@ -682,6 +737,7 @@ router.put('/:id', adminAuth, (req, res, next) => {
   } catch (err) {
     console.error('更新讲义错误:', err);
     cleanupUpload(cover);
+    cleanupUpload(file);
     if (coverPath && coverPath !== lecture.cover_path) {
       const savedCoverPath = safeCoverPath(coverPath);
       if (fs.existsSync(savedCoverPath)) fs.unlinkSync(savedCoverPath);
