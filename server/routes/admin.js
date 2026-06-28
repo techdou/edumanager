@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const db = require('../db');
+const logger = require('../logger');
 const adminAuth = require('../middleware/adminAuth');
 
 const router = express.Router();
@@ -156,14 +157,18 @@ router.post('/users', (req, res) => {
   }
 
   const passwordHash = bcrypt.hashSync(password, 10);
-  const result = db.run(`
-    INSERT INTO students (username, password_hash, email, status)
-    VALUES (?, ?, ?, ?)
-  `, [username, passwordHash, email, status]);
+  // 事务：students 与 admins 双写必须原子
+  const result = db.transaction(() => {
+    const r = db.run(`
+      INSERT INTO students (username, password_hash, email, status)
+      VALUES (?, ?, ?, ?)
+    `, [username, passwordHash, email, status]);
 
-  if (role === 'admin') {
-    db.run('INSERT INTO admins (username, password_hash) VALUES (?, ?)', [username, passwordHash]);
-  }
+    if (role === 'admin') {
+      db.run('INSERT INTO admins (username, password_hash) VALUES (?, ?)', [username, passwordHash]);
+    }
+    return r;
+  });
 
   const user = getUserById(result.lastInsertRowid);
   logActivity(user, 'create_user', role, safeJson({ created_by: req.admin.username || req.admin.id }));
@@ -221,21 +226,24 @@ router.put('/users/:id', (req, res) => {
   const passwordHash = password ? bcrypt.hashSync(password, 10) : null;
   const studentHash = passwordHash || db.get('SELECT password_hash FROM students WHERE id = ?', [user.id]).password_hash;
 
-  db.run(`
-    UPDATE students
-    SET username = ?, email = ?, status = ?${passwordHash ? ', password_hash = ?' : ''}
-    WHERE id = ?
-  `, passwordHash
-    ? [username, email, status, passwordHash, user.id]
-    : [username, email, status, user.id]);
+  // 事务：students 表与 admins 表的角色/密码/用户名同步必须原子，避免半边更新
+  db.transaction(() => {
+    db.run(`
+      UPDATE students
+      SET username = ?, email = ?, status = ?${passwordHash ? ', password_hash = ?' : ''}
+      WHERE id = ?
+    `, passwordHash
+      ? [username, email, status, passwordHash, user.id]
+      : [username, email, status, user.id]);
 
-  if (user.role === 'admin' && role === 'admin') {
-    db.run('UPDATE admins SET username = ?, password_hash = ? WHERE username = ?', [username, studentHash, user.username]);
-  } else if (user.role === 'admin' && role === 'student') {
-    db.run('DELETE FROM admins WHERE username = ?', [user.username]);
-  } else if (user.role === 'student' && role === 'admin') {
-    db.run('INSERT INTO admins (username, password_hash) VALUES (?, ?)', [username, studentHash]);
-  }
+    if (user.role === 'admin' && role === 'admin') {
+      db.run('UPDATE admins SET username = ?, password_hash = ? WHERE username = ?', [username, studentHash, user.username]);
+    } else if (user.role === 'admin' && role === 'student') {
+      db.run('DELETE FROM admins WHERE username = ?', [user.username]);
+    } else if (user.role === 'student' && role === 'admin') {
+      db.run('INSERT INTO admins (username, password_hash) VALUES (?, ?)', [username, studentHash]);
+    }
+  });
 
   const updated = getUserById(user.id);
   logActivity(updated, 'update_user', role, safeJson({ updated_by: req.admin.username || req.admin.id }));
@@ -253,9 +261,13 @@ router.delete('/users/:id', (req, res) => {
     return res.status(400).json({ error: '至少需要保留一个启用状态的管理员' });
   }
 
-  db.run('DELETE FROM admins WHERE username = ?', [user.username]);
-  db.run('DELETE FROM students WHERE id = ?', [user.id]);
-  logActivity(user, 'delete_user', user.role, safeJson({ deleted_by: req.admin.username || req.admin.id }));
+  // 事务：admins/students/user_activity 关联删除必须原子
+  db.transaction(() => {
+    db.run('DELETE FROM admins WHERE username = ?', [user.username]);
+    db.run('DELETE FROM group_students WHERE student_id = ?', [user.id]);
+    db.run('DELETE FROM students WHERE id = ?', [user.id]);
+    logActivity(user, 'delete_user', user.role, safeJson({ deleted_by: req.admin.username || req.admin.id }));
+  });
   res.json({ success: true });
 });
 
@@ -426,10 +438,13 @@ router.delete('/categories/:id', (req, res) => {
     return res.status(404).json({ error: '分类不存在' });
   }
 
-  db.run('UPDATE lectures SET category_id = NULL WHERE category_id = ?', [req.params.id]);
-  db.run('UPDATE knowledge_docs SET category_id = NULL WHERE category_id = ?', [req.params.id]);
-  db.run('DELETE FROM group_category_permissions WHERE category_id = ?', [req.params.id]);
-  db.run('DELETE FROM categories WHERE id = ?', [req.params.id]);
+  // 事务：分类被多表引用，清理必须原子
+  db.transaction(() => {
+    db.run('UPDATE lectures SET category_id = NULL WHERE category_id = ?', [req.params.id]);
+    db.run('UPDATE knowledge_docs SET category_id = NULL WHERE category_id = ?', [req.params.id]);
+    db.run('DELETE FROM group_category_permissions WHERE category_id = ?', [req.params.id]);
+    db.run('DELETE FROM categories WHERE id = ?', [req.params.id]);
+  });
   res.json({ success: true });
 });
 
@@ -487,9 +502,12 @@ router.delete('/groups/:id', (req, res) => {
     return res.status(404).json({ error: '班级不存在' });
   }
 
-  db.run('DELETE FROM group_students WHERE group_id = ?', [req.params.id]);
-  db.run('DELETE FROM group_category_permissions WHERE group_id = ?', [req.params.id]);
-  db.run('DELETE FROM groups WHERE id = ?', [req.params.id]);
+  // 事务：班级关联表清理必须原子
+  db.transaction(() => {
+    db.run('DELETE FROM group_students WHERE group_id = ?', [req.params.id]);
+    db.run('DELETE FROM group_category_permissions WHERE group_id = ?', [req.params.id]);
+    db.run('DELETE FROM groups WHERE id = ?', [req.params.id]);
+  });
   res.json({ success: true });
 });
 
@@ -568,9 +586,12 @@ router.post('/groups/:id/categories', (req, res) => {
     }
   }
 
-  db.run('DELETE FROM group_category_permissions WHERE group_id = ?', [req.params.id]);
-  categoryIds.forEach(catId => {
-    db.run('INSERT INTO group_category_permissions (group_id, category_id) VALUES (?, ?)', [req.params.id, catId]);
+  // 事务：先删后插的全量替换必须原子，避免中途失败丢权限
+  db.transaction(() => {
+    db.run('DELETE FROM group_category_permissions WHERE group_id = ?', [req.params.id]);
+    categoryIds.forEach(catId => {
+      db.run('INSERT INTO group_category_permissions (group_id, category_id) VALUES (?, ?)', [req.params.id, catId]);
+    });
   });
   res.json({ success: true });
 });

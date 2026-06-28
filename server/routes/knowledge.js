@@ -5,11 +5,13 @@ const multer = require('multer');
 const chardet = require('chardet');
 const iconv = require('iconv-lite');
 const db = require('../db');
+const config = require('../config');
+const logger = require('../logger');
 const adminAuth = require('../middleware/adminAuth');
 
 const router = express.Router();
-const storageRoot = path.resolve(__dirname, '../../data/knowledge');
-const coverRoot = path.resolve(__dirname, '../../data/covers/knowledge');
+const storageRoot = config.knowledgeDir;
+const coverRoot = config.knowledgeCoverDir;
 fs.mkdirSync(storageRoot, { recursive: true });
 fs.mkdirSync(coverRoot, { recursive: true });
 
@@ -228,11 +230,15 @@ router.post('/upload', adminAuth, (req, res, next) => {
   fs.renameSync(file.path, storedPath);
   const coverPath = saveCover(cover);
 
-  const result = db.run(`
-    INSERT INTO knowledge_docs (title, url, summary, category_id, source, file_path, file_name, file_type, cover_path, is_featured)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `, [doc.title, `/api/knowledge/${0}/file`, doc.summary, doc.categoryId, fileType, storedName, file.originalname, fileType, coverPath, doc.isFeatured]);
-  db.run('UPDATE knowledge_docs SET url = ? WHERE id = ?', [`/api/knowledge/${result.lastInsertRowid}/file`, result.lastInsertRowid]);
+  // 事务：INSERT 与 UPDATE url 必须原子
+  const result = db.transaction(() => {
+    const r = db.run(`
+      INSERT INTO knowledge_docs (title, url, summary, category_id, source, file_path, file_name, file_type, cover_path, is_featured)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [doc.title, `/api/knowledge/${0}/file`, doc.summary, doc.categoryId, fileType, storedName, file.originalname, fileType, coverPath, doc.isFeatured]);
+    db.run('UPDATE knowledge_docs SET url = ? WHERE id = ?', [`/api/knowledge/${r.lastInsertRowid}/file`, r.lastInsertRowid]);
+    return r;
+  });
   res.status(201).json(getPublicDoc(getDoc(result.lastInsertRowid)));
 });
 
@@ -348,15 +354,26 @@ router.delete('/:id', adminAuth, (req, res) => {
   if (!existing) {
     return res.status(404).json({ error: '知识文档不存在' });
   }
+  // 先删 DB 记录（事务），再删文件。文件删除失败仅记日志，不影响一致性
+  db.transaction(() => {
+    db.run('DELETE FROM knowledge_docs WHERE id = ?', [req.params.id]);
+  });
   if (existing.file_path) {
-    const filePath = safeFilePath(existing.file_path);
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    try {
+      const filePath = safeFilePath(existing.file_path);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch (err) {
+      logger.error({ reqId: req.id, id: req.params.id, err: String(err) }, 'knowledge_delete_file_error');
+    }
   }
   if (existing.cover_path) {
-    const coverPath = safeCoverPath(existing.cover_path);
-    if (fs.existsSync(coverPath)) fs.unlinkSync(coverPath);
+    try {
+      const coverPath = safeCoverPath(existing.cover_path);
+      if (fs.existsSync(coverPath)) fs.unlinkSync(coverPath);
+    } catch (err) {
+      logger.error({ reqId: req.id, id: req.params.id, err: String(err) }, 'knowledge_delete_cover_error');
+    }
   }
-  db.run('DELETE FROM knowledge_docs WHERE id = ?', [req.params.id]);
   res.json({ success: true });
 });
 
