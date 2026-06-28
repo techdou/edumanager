@@ -163,7 +163,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import axios from 'axios'
+import api, { showToast } from '../lib/http'
 
 const route = useRoute()
 const slug = computed(() => route.params.slug)
@@ -289,23 +289,37 @@ async function loadLecture() {
   activeAnchor.value = ''
   readProgress.value = 0
   iframeError.value = false
-  
-  const res = await axios.get('/api/lectures', { headers: authHeaders() })
-  lecture.value = res.data.find(l => l.slug === slug.value)
-  chapters.value = lecture.value?.chapters || []
-  restoreSavedProgress()
-  
-  // Try to load TOC for current chapter
-  if (currentPath.value && !nativeLayout.value) {
-    try {
-      const tocRes = await axios.get(`/api/lectures/toc/${slug.value}/${currentChapter.value}`, { headers: authHeaders() })
-      toc.value = tocRes.data
-    } catch {
-      toc.value = null
+
+  try {
+    const res = await api.get('/api/lectures', { headers: authHeaders() })
+    const list = Array.isArray(res.data) ? res.data : []
+    lecture.value = list.find(l => l && l.slug === slug.value) || null
+    chapters.value = lecture.value?.chapters || []
+    restoreSavedProgress()
+
+    // 讲义不存在或无权限：给出明确提示而非空白
+    if (!lecture.value) {
+      showToast('讲义不存在或无权限访问', 'warn')
+      loading.value = false
+      return
     }
+
+    // 尝试加载当前章节的 TOC（失败不影响主流程）
+    if (currentPath.value && !nativeLayout.value) {
+      try {
+        const tocRes = await api.get(`/api/lectures/toc/${slug.value}/${currentChapter.value}`, { headers: authHeaders() })
+        toc.value = tocRes.data && tocRes.data.modules ? tocRes.data : null
+      } catch {
+        toc.value = null
+      }
+    }
+  } catch (err) {
+    // 网络/服务错误已由 http 拦截器提示；此处仅保证 UI 不崩
+    lecture.value = null
+    chapters.value = []
+  } finally {
+    loading.value = false
   }
-  
-  loading.value = false
 }
 
 function onIframeLoad() {

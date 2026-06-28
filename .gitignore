@@ -46,3 +46,12 @@ next-env.d.ts
 /src/generated/prisma
 lectures/
 server/uploads/
+
+# macOS AppleDouble junk
+**/._*
+.DS_Store?
+
+# build artifacts
+client/dist/
+client/dist-backup-*/
+

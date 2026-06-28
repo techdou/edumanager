@@ -1,7 +1,9 @@
 const jwt = require('jsonwebtoken');
 const db = require('../db');
+const config = require('../config');
+const logger = require('../logger');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'edumanager-default-secret';
+const JWT_SECRET = config.jwtSecret;
 
 function adminAuth(req, res, next) {
   const token = req.headers.authorization?.replace('Bearer ', '');

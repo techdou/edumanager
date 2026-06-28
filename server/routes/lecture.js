@@ -7,14 +7,17 @@ const fs = require('fs');
 const AdmZip = require('adm-zip');
 const jwt = require('jsonwebtoken');
 const db = require('../db');
+const logger = require('../logger');
+const config = require('../config');
 
 // 管理员权限中间件（用于需要管理员的操作）
 const adminAuth = require('../middleware/adminAuth');
 const { studentAuth, optionalStudentAuth } = require('../middleware/studentAuth');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'edumanager-default-secret';
+const JWT_SECRET = config.jwtSecret;
 const { filterAccessibleLectures, canAccessLecture } = require('../utils/permissions');
 const { extractTOC } = require('../utils/tocExtractor');
+const { atomicWriteDir } = require('../utils/fs');
 
 // ZIP 上传配置
 const upload = multer({
@@ -22,9 +25,9 @@ const upload = multer({
   limits: { fileSize: 200 * 1024 * 1024 } // 200MB
 });
 
-const lecturesRoot = path.resolve(__dirname, '../../lectures');
-const coverRoot = path.resolve(__dirname, '../../data/covers/lectures');
-fs.mkdirSync(path.join(__dirname, '../uploads'), { recursive: true });
+const lecturesRoot = config.lecturesDir;
+const coverRoot = config.lectureCoverDir;
+fs.mkdirSync(config.uploadsDir, { recursive: true });
 fs.mkdirSync(lecturesRoot, { recursive: true });
 fs.mkdirSync(coverRoot, { recursive: true });
 
@@ -140,6 +143,27 @@ function chooseEntry(files) {
   return files.find(file => path.basename(file).toLowerCase() === 'index.html')
     || files.find(file => path.basename(file).toLowerCase() === 'index.htm')
     || files[0];
+}
+
+// 解压/拷贝讲义内容到临时目录（供 atomicWriteDir 调用）。
+// 成功返回 populated 的目录，失败抛错（由 atomicWriteDir 负责清理 tmp）
+function extractLectureContent(uploadFile, destDir) {
+  const isZip = uploadFile.originalname.toLowerCase().endsWith('.zip');
+  const isSingleHtml = isHtmlFile(uploadFile.originalname);
+  if (!isZip && !isSingleHtml) {
+    throw new Error('仅支持 ZIP 或 HTML 文件');
+  }
+  if (isSingleHtml) {
+    fs.renameSync(uploadFile.path, path.join(destDir, uploadFile.originalname));
+    return;
+  }
+  // 优先用 config 探测到的解压器，避免硬编码 unar/unzip
+  const cmd = config.unarchiver || 'unzip';
+  if (cmd === 'unar') {
+    execFileSync('unar', ['-o', destDir, uploadFile.path], { encoding: 'utf-8' });
+  } else {
+    execFileSync('unzip', ['-o', uploadFile.path, '-d', destDir], { encoding: 'utf-8' });
+  }
 }
 
 function buildChapterCandidates(root) {
@@ -402,69 +426,62 @@ router.post('/', adminAuth, (req, res, next) => {
     const zipName = path.parse(file.originalname).name;
     const extractPath = safeLecturePath(slug);
     coverPath = saveCover(cover);
-    
-    // 清理旧目录
-    if (fs.existsSync(extractPath)) {
-      fs.rmSync(extractPath, { recursive: true, force: true });
-    }
-    fs.mkdirSync(extractPath, { recursive: true });
-    
-    if (isSingleHtml) {
-      fs.renameSync(file.path, path.join(extractPath, file.originalname));
-    } else {
-      // 使用 unar 解压（正确处理 Windows 中文文件名 GBK 编码）
-      try {
-        execFileSync('unar', ['-o', extractPath, file.path], { encoding: 'utf-8' });
-      } catch (e) {
-        // fallback 到 unzip
-        execFileSync('unzip', ['-o', file.path, '-d', extractPath], { encoding: 'utf-8' });
-      }
-    }
-    
-    // 创建讲义记录
-    const result = db.run(`
-      INSERT INTO lectures (title, slug, zip_name, category_id, cover_path, layout_mode, is_public) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [title, slug, zipName, categoryId, coverPath, layoutMode, isPublic]);
-    
-    const lectureId = result.lastInsertRowid;
-    
+
+    // 1) 原子写入讲义目录：先解压到 <slug>.tmp-xxx/，成功后再替换正式目录
+    //    这样解压失败/中断不会留下半成品目录
+    atomicWriteDir(lecturesRoot, extractPath, (tmpDir) => {
+      extractLectureContent(file, tmpDir);
+    });
+    // 临时上传文件已被 extractLectureContent 处理（rename 或解压），清理引用
+    cleanupUpload(file);
+
+    // 2) 解析章节候选（在事务外做，避免文件 IO 占用事务）
     const chapterCandidates = buildChapterCandidates(extractPath);
     if (chapterCandidates.length === 0) {
       throw new Error('未找到可用 HTML 文件');
     }
-    const usedSlugs = new Set();
-    chapterCandidates.forEach((chapter, index) => {
-      const chapterSlug = chapterCandidates.length === 1
-        ? slug
-        : chapterSlugFromName(chapter.slugSource, usedSlugs);
-      const chapterPath = chapter.path ? `${slug}/${chapter.path}` : slug;
-      db.run(`
-        INSERT INTO chapters (lecture_id, title, slug, path, entry_file, order_index) VALUES (?, ?, ?, ?, ?, ?)
-      `, [lectureId, chapter.title || title, chapterSlug, chapterPath, chapter.entryFile, index]);
+
+    // 3) 事务：INSERT lectures + 多条 INSERT chapters 必须原子完成
+    //    中途失败自动回滚，不会留下"无章节的幽灵讲义"
+    const lectureId = db.transaction(() => {
+      const result = db.run(`
+        INSERT INTO lectures (title, slug, zip_name, category_id, cover_path, layout_mode, is_public) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [title, slug, zipName, categoryId, coverPath, layoutMode, isPublic]);
+      const newLectureId = result.lastInsertRowid;
+
+      const usedSlugs = new Set();
+      chapterCandidates.forEach((chapter, index) => {
+        const chapterSlug = chapterCandidates.length === 1
+          ? slug
+          : chapterSlugFromName(chapter.slugSource, usedSlugs);
+        const chapterPath = chapter.path ? `${slug}/${chapter.path}` : slug;
+        db.run(`
+          INSERT INTO chapters (lecture_id, title, slug, path, entry_file, order_index) VALUES (?, ?, ?, ?, ?, ?)
+        `, [newLectureId, chapter.title || title, chapterSlug, chapterPath, chapter.entryFile, index]);
+      });
+      return newLectureId;
     });
-    
-    // 删除临时文件
-    cleanupUpload(file);
-    
+
     const chapters = db.query('SELECT * FROM chapters WHERE lecture_id = ? ORDER BY order_index', [lectureId]);
-    
-    res.json({ 
-      id: lectureId, 
-      title, 
-      slug, 
+
+    res.json({
+      id: lectureId,
+      title,
+      slug,
       layout_mode: layoutMode,
       cover_url: coverPath ? `/api/lectures/${lectureId}/cover` : null,
       chapters
     });
-    
+
   } catch (err) {
-    console.error('ZIP 处理错误:', err);
+    logger.error({ reqId: req.id, err: err && err.stack ? err.stack : String(err), slug }, 'lecture_upload_error');
     cleanupFiles([file, cover]);
     if (coverPath) {
       const savedCoverPath = safeCoverPath(coverPath);
       if (fs.existsSync(savedCoverPath)) fs.unlinkSync(savedCoverPath);
     }
-    res.status(500).json({ error: 'ZIP 解压失败' });
+    const msg = err && err.message ? err.message : '上传失败';
+    res.status(500).json({ error: msg.includes('HTML') || msg.includes('ZIP') ? msg : '讲义处理失败' });
   }
 });
 
@@ -484,27 +501,39 @@ router.get('/:id/cover', (req, res) => {
 // 删除讲义
 router.delete('/:id', adminAuth, (req, res) => {
   const { id } = req.params;
-  
+
   const lecture = db.get('SELECT * FROM lectures WHERE id = ?', [id]);
   if (!lecture) {
     return res.status(404).json({ error: '讲义不存在' });
   }
-  
-  // 删除数据库记录
-  db.run('DELETE FROM chapters WHERE lecture_id = ?', [id]);
-  db.run('DELETE FROM lectures WHERE id = ?', [id]);
-  
-  // 删除文件目录
+
+  // 事务：先删 DB 记录，成功后再删文件。
+  // 文件删除失败不影响 DB 一致性（最多残留孤儿文件，可后续清理），
+  // 但 DB 必须原子，避免"chapters 删了 lectures 还在"
+  db.transaction(() => {
+    db.run('DELETE FROM chapters WHERE lecture_id = ?', [id]);
+    db.run('DELETE FROM lectures WHERE id = ?', [id]);
+  });
+
+  // 删除文件目录（DB 已提交，文件删除失败只记日志）
   const lecturePath = safeLecturePath(lecture.slug);
-  if (fs.existsSync(lecturePath)) {
-    fs.rmSync(lecturePath, { recursive: true, force: true });
+  try {
+    if (fs.existsSync(lecturePath)) {
+      fs.rmSync(lecturePath, { recursive: true, force: true });
+    }
+  } catch (err) {
+    logger.error({ reqId: req.id, slug: lecture.slug, err: String(err) }, 'lecture_delete_file_error');
   }
 
   if (lecture.cover_path) {
-    const coverPath = safeCoverPath(lecture.cover_path);
-    if (fs.existsSync(coverPath)) fs.unlinkSync(coverPath);
+    try {
+      const coverPath = safeCoverPath(lecture.cover_path);
+      if (fs.existsSync(coverPath)) fs.unlinkSync(coverPath);
+    } catch (err) {
+      logger.error({ reqId: req.id, err: String(err) }, 'lecture_delete_cover_error');
+    }
   }
-  
+
   res.json({ success: true });
 });
 
@@ -645,22 +674,11 @@ router.put('/:id', adminAuth, (req, res, next) => {
       coverPath = saveCover(cover);
     }
 
-    // 如果修改了 slug，重命名讲义目录
-    if (newSlug) {
-      const oldPath = safeLecturePath(oldSlug);
-      const newPath = safeLecturePath(newSlug);
-      if (fs.existsSync(oldPath) && !fs.existsSync(newPath)) {
-        fs.renameSync(oldPath, newPath);
-      }
-      const chapters = db.query('SELECT id, path FROM chapters WHERE lecture_id = ?', [id]);
-      chapters.forEach(chapter => {
-        const newChapterPath = chapter.path.replace(new RegExp('^' + oldSlug), newSlug);
-        db.run('UPDATE chapters SET path = ? WHERE id = ?', [newChapterPath, chapter.id]);
-      });
-    }
+    const activeSlug = newSlug || oldSlug;
 
-    // 处理内容文件重新上传
-    let chaptersChanged = false;
+    // === 阶段 1：文件系统操作（事务外，因为涉及外部解压）===
+    // 内容重传：原子写入，避免半成品目录
+    let rebuiltChapters = null;
     if (file) {
       const isZip = file.originalname.toLowerCase().endsWith('.zip');
       const isSingleHtml = isHtmlFile(file.originalname);
@@ -669,58 +687,75 @@ router.put('/:id', adminAuth, (req, res, next) => {
         return res.status(400).json({ error: '仅支持 ZIP 或 HTML 文件' });
       }
 
-      const activeSlug = newSlug || oldSlug;
       const extractPath = safeLecturePath(activeSlug);
-
-      // 清理旧目录并重建
-      if (fs.existsSync(extractPath)) {
-        fs.rmSync(extractPath, { recursive: true, force: true });
-      }
-      fs.mkdirSync(extractPath, { recursive: true });
-
-      if (isSingleHtml) {
-        fs.renameSync(file.path, path.join(extractPath, file.originalname));
-      } else {
-        try {
-          execFileSync('unar', ['-o', extractPath, file.path], { encoding: 'utf-8' });
-        } catch (e) {
-          execFileSync('unzip', ['-o', file.path, '-d', extractPath], { encoding: 'utf-8' });
-        }
-      }
+      atomicWriteDir(lecturesRoot, extractPath, (tmpDir) => {
+        extractLectureContent(file, tmpDir);
+      });
       cleanupUpload(file);
 
-      // 删除旧章节，重建
-      db.run('DELETE FROM chapters WHERE lecture_id = ?', [id]);
       const chapterCandidates = buildChapterCandidates(extractPath);
       if (chapterCandidates.length === 0) {
         throw new Error('未找到可用 HTML 文件');
       }
+      // 预计算章节，待事务内写入
       const usedSlugs = new Set();
-      chapterCandidates.forEach((chapter, index) => {
+      rebuiltChapters = chapterCandidates.map((chapter, index) => {
         const chapterSlug = chapterCandidates.length === 1
           ? activeSlug
           : chapterSlugFromName(chapter.slugSource, usedSlugs);
         const chapterPath = chapter.path ? `${activeSlug}/${chapter.path}` : activeSlug;
-        db.run(`
-          INSERT INTO chapters (lecture_id, title, slug, path, entry_file, order_index) 
-          VALUES (?, ?, ?, ?, ?, ?)
-        `, [id, chapter.title || title, chapterSlug, chapterPath, chapter.entryFile, index]);
+        return {
+          title: chapter.title || title,
+          slug: chapterSlug,
+          path: chapterPath,
+          entryFile: chapter.entryFile,
+          orderIndex: index
+        };
       });
-      chaptersChanged = true;
+    } else if (newSlug && newSlug !== oldSlug) {
+      // 仅改 slug：原子重命名目录
+      const oldPath = safeLecturePath(oldSlug);
+      const newPath = safeLecturePath(newSlug);
+      if (fs.existsSync(oldPath) && !fs.existsSync(newPath)) {
+        fs.renameSync(oldPath, newPath);
+      }
     }
 
-    // 更新数据库
-    const updateFields = [];
-    const updateValues = [];
-    if (title) { updateFields.push('title = ?'); updateValues.push(title); }
-    if (newSlug) { updateFields.push('slug = ?'); updateValues.push(newSlug); }
-    if (categoryId) { updateFields.push('category_id = ?'); updateValues.push(categoryId); }
-    if (coverPath !== lecture.cover_path) { updateFields.push('cover_path = ?'); updateValues.push(coverPath); }
-    updateFields.push('layout_mode = ?'); updateValues.push(layoutMode);
-    updateFields.push('is_public = ?'); updateValues.push(isPublic);
-    updateValues.push(id);
+    // === 阶段 2：数据库事务（slug 更新/章节路径更新/章节重建/讲义更新 全部原子）===
+    db.transaction(() => {
+      // slug 变更 → 更新所有章节的 path 前缀
+      if (newSlug && newSlug !== oldSlug) {
+        const chapters = db.query('SELECT id, path FROM chapters WHERE lecture_id = ?', [id]);
+        const escapedOld = oldSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        chapters.forEach(chapter => {
+          const newChapterPath = chapter.path.replace(new RegExp('^' + escapedOld), newSlug);
+          db.run('UPDATE chapters SET path = ? WHERE id = ?', [newChapterPath, chapter.id]);
+        });
+      }
 
-    db.run(`UPDATE lectures SET ${updateFields.join(', ')} WHERE id = ?`, updateValues);
+      // 内容重传 → 删除旧章节，写入新章节
+      if (rebuiltChapters) {
+        db.run('DELETE FROM chapters WHERE lecture_id = ?', [id]);
+        rebuiltChapters.forEach(ch => {
+          db.run(`
+            INSERT INTO chapters (lecture_id, title, slug, path, entry_file, order_index)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `, [id, ch.title, ch.slug, ch.path, ch.entryFile, ch.orderIndex]);
+        });
+      }
+
+      // 更新讲义主记录
+      const updateFields = [];
+      const updateValues = [];
+      if (title) { updateFields.push('title = ?'); updateValues.push(title); }
+      if (newSlug) { updateFields.push('slug = ?'); updateValues.push(newSlug); }
+      if (categoryId) { updateFields.push('category_id = ?'); updateValues.push(categoryId); }
+      if (coverPath !== lecture.cover_path) { updateFields.push('cover_path = ?'); updateValues.push(coverPath); }
+      updateFields.push('layout_mode = ?'); updateValues.push(layoutMode);
+      updateFields.push('is_public = ?'); updateValues.push(isPublic);
+      updateValues.push(id);
+      db.run(`UPDATE lectures SET ${updateFields.join(', ')} WHERE id = ?`, updateValues);
+    });
 
     const updated = db.get(`
       SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.layout_mode, l.is_public, l.created_at,
@@ -735,7 +770,7 @@ router.put('/:id', adminAuth, (req, res, next) => {
     `, [id]);
     res.json(getPublicLecture(updated));
   } catch (err) {
-    console.error('更新讲义错误:', err);
+    logger.error({ reqId: req.id, id, err: err && err.stack ? err.stack : String(err) }, 'lecture_update_error');
     cleanupUpload(cover);
     cleanupUpload(file);
     if (coverPath && coverPath !== lecture.cover_path) {
@@ -771,13 +806,15 @@ router.put('/:id/chapters', adminAuth, (req, res) => {
       }
     }
 
-    // 更新每个章节的标题和排序
-    chapters.forEach((chapter, index) => {
-      const title = String(chapter.title || '').trim();
-      if (!title) {
-        throw new Error('章节标题不能为空');
-      }
-      db.run('UPDATE chapters SET title = ?, order_index = ? WHERE id = ?', [title, index, chapter.id]);
+    // 事务：批量更新章节标题和排序，保证全部成功或全部不变
+    db.transaction(() => {
+      chapters.forEach((chapter, index) => {
+        const title = String(chapter.title || '').trim();
+        if (!title) {
+          throw new Error('章节标题不能为空');
+        }
+        db.run('UPDATE chapters SET title = ?, order_index = ? WHERE id = ?', [title, index, chapter.id]);
+      });
     });
 
     const updated = db.get(`
