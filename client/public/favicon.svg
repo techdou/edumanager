@@ -1,0 +1,26 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="EduManager icon">
+  <!-- 图标版：用于 favicon、app icon、loading。纯图形无文字，小尺寸仍清晰 -->
+  <defs>
+    <linearGradient id="emGrad2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#D9683F"/>
+      <stop offset="100%" stop-color="#3D5FB8"/>
+    </linearGradient>
+    <linearGradient id="emAccent2" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0%" stop-color="#E8A93A"/>
+      <stop offset="100%" stop-color="#D9683F"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 圆角方形背板（可独立做 favicon） -->
+  <rect x="6" y="6" width="116" height="116" rx="28" fill="url(#emGrad2)"/>
+  <!-- 翻开的书页 -->
+  <path d="M28 44 Q40 38 60 42 L60 96 Q40 92 28 98 Z" fill="#ffffff" fill-opacity="0.95"/>
+  <path d="M100 44 Q88 38 68 42 L68 96 Q88 92 100 98 Z" fill="#ffffff" fill-opacity="0.8"/>
+  <!-- E 三横 -->
+  <rect x="28" y="48" width="26" height="5" rx="2.5" fill="#B14B26"/>
+  <rect x="28" y="65.5" width="20" height="5" rx="2.5" fill="#B14B26"/>
+  <rect x="28" y="83" width="26" height="5" rx="2.5" fill="#B14B26"/>
+  <!-- 上升箭头 -->
+  <path d="M60 92 L76 68 L84 76 L96 56" stroke="url(#emAccent2)" stroke-width="6.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M88 52 L98 54 L96 64" stroke="url(#emAccent2)" stroke-width="6.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

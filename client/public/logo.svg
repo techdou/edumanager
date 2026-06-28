@@ -1,0 +1,48 @@
+<svg width="320" height="80" viewBox="0 0 320 80" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="EduManager">
+  <!--
+    EduManager Logo
+    设计理念：字母 E（Education）+ 翻开的书页 + 上升箭头（成长/进阶）
+    三层含义融合为单一图形符号。
+    配色：暖陶土 terracotta（品牌）+ 暖蓝（主色），与项目 App.vue design tokens 一致。
+    色彩使用 hex 以保证所有渲染器（resvg/旧浏览器）兼容；OKLCH 等价值见注释。
+  -->
+  <defs>
+    <!-- 主渐变: terracotta(#D9683F) → 暖蓝(#3D5FB8) -->
+    <linearGradient id="emGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#D9683F"/>
+      <stop offset="100%" stop-color="#3D5FB8"/>
+    </linearGradient>
+    <!-- 强调渐变: 金(#E8A93A) → terracotta(#D9683F) -->
+    <linearGradient id="emAccent" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0%" stop-color="#E8A93A"/>
+      <stop offset="100%" stop-color="#D9683F"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 图标部分：E + 书本 + 箭头，置于 12x12 网格 -->
+  <g transform="translate(8,8)">
+    <!-- 圆角方形背板 -->
+    <rect x="0" y="0" width="64" height="64" rx="16" fill="url(#emGrad)"/>
+    <!-- 翻开的书页（左页） -->
+    <path d="M14 22 Q20 19 30 21 L30 48 Q20 46 14 49 Z" fill="#ffffff" fill-opacity="0.95"/>
+    <!-- 翻开的书页（右页，略低透明形成层次） -->
+    <path d="M50 22 Q44 19 34 21 L34 48 Q44 46 50 49 Z" fill="#ffffff" fill-opacity="0.8"/>
+    <!-- E 的三横（同时是书脊文字行） -->
+    <rect x="14" y="24" width="13" height="2.6" rx="1.3" fill="#B14B26"/>
+    <rect x="14" y="32.7" width="10" height="2.6" rx="1.3" fill="#B14B26"/>
+    <rect x="14" y="41.4" width="13" height="2.6" rx="1.3" fill="#B14B26"/>
+    <!-- 上升箭头：贯穿书页向上，象征学习成长 -->
+    <path d="M30 46 L38 34 L42 38 L48 28" stroke="url(#emAccent)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <path d="M44 26 L49 27 L48 32" stroke="url(#emAccent)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  </g>
+
+  <!-- 文字部分 -->
+  <g transform="translate(90,0)" font-family="'Sora','DM Sans',system-ui,sans-serif">
+    <!-- Edu 主名 -->
+    <text x="0" y="46" font-size="30" font-weight="700" fill="#2A2A2A" letter-spacing="-0.5">Edu</text>
+    <!-- Manager 次名 -->
+    <text x="67" y="46" font-size="30" font-weight="600" fill="#D9683F" letter-spacing="-0.3">Manager</text>
+    <!-- 标语 -->
+    <text x="2" y="64" font-size="11" font-weight="500" fill="#6B6B7B" letter-spacing="1.5">在线教育讲义管理平台</text>
+  </g>
+</svg>
