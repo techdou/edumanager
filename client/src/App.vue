@@ -7,7 +7,8 @@
 
 <style>
 /* ====== Design Tokens ====== */
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Sora:wght@400;600;700&display=swap');
+/* 字体走系统栈：Google Fonts @import 在大陆普遍超时且阻塞首屏渲染，
+   DM Sans/Sora 对中文正文本来就回退系统字体；确需品牌字体时再 self-host + preload */
 
 :root {
   /* Color System - OKLCH */
@@ -49,9 +50,9 @@
   --space-16: 64px;
   
   /* Typography */
-  --font-sans: 'DM Sans', system-ui, sans-serif;
-  --font-display: 'Sora', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
+  --font-sans: system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  --font-display: system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, Consolas, monospace;
   
   --text-xs: 12px;
   --text-sm: 14px;
@@ -316,6 +317,26 @@ body {
 
 .empty-state-action {
   margin-top: var(--space-6);
+}
+
+/* Error State retry button（Home/Learn 加载失败时显示） */
+.retry-btn {
+  margin-top: var(--space-4);
+  padding: var(--space-2) var(--space-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo);
+}
+
+.retry-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
 }
 
 /* Error State */

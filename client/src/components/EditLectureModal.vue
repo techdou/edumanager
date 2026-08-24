@@ -150,7 +150,7 @@
 
 <script setup>
 import { ref, watch, nextTick } from 'vue'
-import axios from 'axios'
+import adminApi from '../lib/adminApi'
 
 const props = defineProps({
   visible: Boolean,
@@ -224,10 +224,7 @@ function handleContentFile(e) {
   precheckLoading.value = true
   const formData = new FormData()
   formData.append('file', file)
-  const token = localStorage.getItem('adminToken')
-  axios.post('/api/lectures/precheck', formData, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {}
-  }).then(res => {
+  adminApi.post('/api/lectures/precheck', formData).then(res => {
     zipCheck.value = res.data
   }).catch(e => {
     error.value = e.response?.data?.error || '预检失败'
@@ -294,9 +291,7 @@ async function save() {
     if (coverFile.value) formData.append('cover', coverFile.value)
     if (contentFile.value) formData.append('file', contentFile.value)
 
-    const res = await axios.put(`/api/lectures/${props.lecture.id}`, formData, {
-      headers: { ...headers, 'Content-Type': 'multipart/form-data' }
-    })
+    const res = await adminApi.put(`/api/lectures/${props.lecture.id}`, formData)
 
     // 2. 更新章节（如果内容没有重新上传，且有变动）
     if (!contentFile.value) {
@@ -306,9 +301,9 @@ async function save() {
                           JSON.stringify((props.lecture.chapters || []).map(c => c.id))
 
       if (chaptersChanged || orderChanged) {
-        await axios.put(`/api/lectures/${props.lecture.id}/chapters`, {
+        await adminApi.put(`/api/lectures/${props.lecture.id}/chapters`, {
           chapters: form.value.chapters.map((c, i) => ({ id: c.id, title: c.title, order: i }))
-        }, { headers })
+        })
       }
     }
 

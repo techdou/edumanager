@@ -70,6 +70,11 @@
         <span>在首页知识库区域展示</span>
       </label>
 
+      <label class="check-row">
+        <input v-model="form.isPublic" type="checkbox" />
+        <span>公开展示（未登录用户可见）</span>
+      </label>
+
       <div v-if="error" class="alert">{{ error }}</div>
       <div class="actions">
         <button class="btn-primary" type="submit" :disabled="saving">
@@ -88,6 +93,7 @@
               <span class="tag">{{ doc.category_name || '未分类' }}</span>
               <span class="tag type">{{ typeText(doc) }}</span>
               <span v-if="doc.is_featured" class="tag featured">首页展示</span>
+              <span v-if="doc.is_public" class="tag public">公开</span>
             </div>
             <h3>{{ doc.title }}</h3>
             <p>{{ doc.summary || '暂无简介' }}</p>
@@ -107,7 +113,7 @@
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
-import axios from 'axios'
+import adminApi from '../../lib/adminApi'
 
 const docs = ref([])
 const categories = ref([])
@@ -122,6 +128,7 @@ const form = reactive({
   summary: '',
   categoryId: '',
   isFeatured: true,
+  isPublic: false,
   mode: 'link',
   file: null,
   cover: null
@@ -129,18 +136,13 @@ const form = reactive({
 
 onMounted(loadData)
 
-function headers() {
-  const token = localStorage.getItem('adminToken')
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
-
 async function loadData() {
   loading.value = true
   error.value = ''
   try {
     const [docRes, categoryRes] = await Promise.all([
-      axios.get('/api/knowledge'),
-      axios.get('/api/categories')
+      adminApi.get('/api/knowledge'),
+      adminApi.get('/categories')
     ])
     docs.value = docRes.data
     categories.value = categoryRes.data
@@ -159,6 +161,7 @@ function resetForm() {
     summary: '',
     categoryId: '',
     isFeatured: true,
+    isPublic: false,
     mode: 'link',
     file: null,
     cover: null
@@ -174,6 +177,7 @@ function editDoc(doc) {
     summary: doc.summary || '',
     categoryId: doc.category_id || '',
     isFeatured: Boolean(doc.is_featured),
+    isPublic: Boolean(doc.is_public),
     mode: doc.file_type ? 'file' : 'link',
     file: null,
     cover: null
@@ -203,6 +207,7 @@ function appendDocFields(formData) {
   formData.append('categoryId', form.categoryId ? String(form.categoryId) : '')
   formData.append('source', 'feishu')
   formData.append('isFeatured', form.isFeatured ? '1' : '0')
+  formData.append('isPublic', form.isPublic ? '1' : '0')
   if (form.cover) formData.append('cover', form.cover)
 }
 
@@ -218,11 +223,11 @@ async function saveDoc() {
         return
       }
       formData.append('file', form.file)
-      await axios.post('/api/knowledge/upload', formData, { headers: headers() })
+      await adminApi.post('/api/knowledge/upload', formData)
     } else if (editingId.value) {
-      await axios.put(`/api/knowledge/${editingId.value}`, formData, { headers: headers() })
+      await adminApi.put(`/api/knowledge/${editingId.value}`, formData)
     } else {
-      await axios.post('/api/knowledge', formData, { headers: headers() })
+      await adminApi.post('/api/knowledge', formData)
     }
     resetForm()
     await loadData()
@@ -237,7 +242,7 @@ async function deleteDoc(doc) {
   if (!confirm(`确定删除知识文档「${doc.title}」吗？`)) return
   error.value = ''
   try {
-    await axios.delete(`/api/knowledge/${doc.id}`, { headers: headers() })
+    await adminApi.delete(`/api/knowledge/${doc.id}`)
     docs.value = docs.value.filter(item => item.id !== doc.id)
   } catch (e) {
     error.value = e.response?.data?.error || '删除失败'
@@ -460,6 +465,11 @@ textarea:focus {
 .tag.featured {
   background: #eaf1ff;
   color: #1f5fce;
+}
+
+.tag.public {
+  background: #ecfdf3;
+  color: #027a48;
 }
 
 .tag.type {

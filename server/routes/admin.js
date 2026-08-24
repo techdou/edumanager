@@ -466,6 +466,104 @@ router.delete('/categories/:id', (req, res) => {
   res.json({ success: true });
 });
 
+// ===== 学习数据看板（F3）=====
+
+// 学习进度总览：班级×讲义矩阵 + 每讲义的学习人数/平均进度/完成人数
+router.get('/stats/progress-overview', (req, res) => {
+  const groups = db.query('SELECT id, name FROM groups ORDER BY created_at DESC');
+
+  // 每班级的学生集合
+  const membersByGroup = new Map();
+  groups.forEach(g => {
+    membersByGroup.set(g.id, new Set(
+      db.query('SELECT student_id FROM group_students WHERE group_id = ?', [g.id]).map(r => r.student_id)
+    ));
+  });
+
+  // 学生 × 讲义 的最新平均进度（一名学生对同一讲义多个章节取平均）
+  const progressRows = db.query(`
+    SELECT student_id, lecture_slug, lecture_title, AVG(progress) AS avg_progress
+    FROM user_progress
+    GROUP BY student_id, lecture_slug
+  `);
+  const byLecture = new Map();
+  const byStudentLecture = new Map();
+  progressRows.forEach(row => {
+    const key = `${row.student_id}:${row.lecture_slug}`;
+    byStudentLecture.set(key, row.avg_progress);
+    if (!byLecture.has(row.lecture_slug)) {
+      byLecture.set(row.lecture_slug, { lecture_slug: row.lecture_slug, lecture_title: row.lecture_title, learners: 0, progressSum: 0, completed: 0 });
+    }
+    const item = byLecture.get(row.lecture_slug);
+    item.learners += 1;
+    item.progressSum += row.avg_progress;
+    if (row.avg_progress >= 99.5) item.completed += 1;
+  });
+
+  // 组×讲义 矩阵（该组成员对该讲义的平均进度）
+  const matrix = groups.map(g => {
+    const cells = {};
+    for (const [lectureSlug, item] of byLecture.entries()) {
+      let sum = 0;
+      let count = 0;
+      for (const studentId of membersByGroup.get(g.id)) {
+        const p = byStudentLecture.get(`${studentId}:${lectureSlug}`);
+        if (p !== undefined) { sum += p; count += 1; }
+      }
+      if (count > 0) cells[lectureSlug] = Math.round(sum / count);
+    }
+    return { group_id: g.id, group_name: g.name, student_count: membersByGroup.get(g.id).size, cells };
+  });
+
+  const lectures = [...byLecture.values()].map(item => ({
+    lecture_slug: item.lecture_slug,
+    lecture_title: item.lecture_title,
+    learners: item.learners,
+    avg_progress: Math.round(item.progressSum / Math.max(1, item.learners)),
+    completed: item.completed
+  })).sort((a, b) => b.learners - a.learners);
+
+  res.json({ groups: matrix, lectures });
+});
+
+// 断点续学名单：7 天未回访、且有进行中讲义（0 < 平均进度 < 100）的学生
+router.get('/stats/stalled', (req, res) => {
+  const rows = db.query(`
+    SELECT s.id AS student_id, s.username, s.real_name,
+           MAX(up.updated_at) AS last_active,
+           COUNT(*) AS in_progress,
+           ROUND(AVG(up.avg_progress), 0) AS avg_progress
+    FROM (
+      SELECT student_id, lecture_slug, AVG(progress) AS avg_progress, MAX(updated_at) AS updated_at
+      FROM user_progress
+      GROUP BY student_id, lecture_slug
+      HAVING AVG(progress) > 0 AND AVG(progress) < 99.5
+    ) up
+    INNER JOIN students s ON s.id = up.student_id
+    WHERE s.status = 'active'
+    GROUP BY s.id
+    HAVING MAX(up.updated_at) < datetime('now', '-7 days')
+    ORDER BY last_active ASC
+    LIMIT 100
+  `);
+  res.json(rows);
+});
+
+// 卡点章节：学习人数 ≥3 的章节里平均进度最低的 Top 10（内容难或写得差的信号）
+router.get('/stats/stuck-chapters', (req, res) => {
+  const rows = db.query(`
+    SELECT lecture_slug, lecture_title, chapter_slug, chapter_title,
+           COUNT(*) AS learners,
+           ROUND(AVG(progress), 0) AS avg_progress
+    FROM user_progress
+    GROUP BY lecture_slug, chapter_slug
+    HAVING COUNT(*) >= 3 AND AVG(progress) < 99.5
+    ORDER BY avg_progress ASC
+    LIMIT 10
+  `);
+  res.json(rows);
+});
+
 // ===== 班级管理 =====
 
 // 班级列表

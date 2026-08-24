@@ -80,6 +80,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import adminApi from '../../lib/adminApi'
+import { formatDateTime } from '../../utils/date'
 
 const loading = ref(true)
 const error = ref('')
@@ -141,10 +142,7 @@ function shortDate(date) {
   return date.slice(5).replace('-', '/')
 }
 
-function formatDate(value) {
-  if (!value) return '-'
-  return new Date(String(value).replace(' ', 'T')).toLocaleString('zh-CN', { hour12: false })
-}
+const formatDate = formatDateTime
 
 function roleText(role) {
   return role === 'admin' ? '管理员' : '学生'

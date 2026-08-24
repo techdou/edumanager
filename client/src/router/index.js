@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { isValidToken } from '../lib/jwt'
 
 const routes = [
   {
@@ -95,15 +96,6 @@ const router = createRouter({
   history: createWebHistory(),
   routes
 })
-
-function isValidToken(token) {
-  try {
-    const payload = JSON.parse(atob(token.split('.')[1]))
-    return payload.exp * 1000 > Date.now()
-  } catch {
-    return false
-  }
-}
 
 const DEFAULT_TITLE = 'EduManager - 在线教育讲义管理平台'
 

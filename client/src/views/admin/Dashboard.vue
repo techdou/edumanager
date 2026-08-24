@@ -107,7 +107,8 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import axios from 'axios'
+import adminApi from '../../lib/adminApi'
+import { formatDateTime } from '../../utils/date'
 import EditLectureModal from '../../components/EditLectureModal.vue'
 
 const lectures = ref([])
@@ -156,11 +157,9 @@ async function fetchLectures() {
   loading.value = true
   error.value = ''
   try {
-    const token = localStorage.getItem('adminToken')
-    const headers = token ? { Authorization: `Bearer ${token}` } : {}
     const [lectureRes, categoryRes] = await Promise.all([
-      axios.get('/api/lectures', { headers }),
-      axios.get('/api/categories', { headers })
+      adminApi.get('/api/lectures'),
+      adminApi.get('/categories')
     ])
     lectures.value = lectureRes.data
     categories.value = categoryRes.data
@@ -175,10 +174,7 @@ async function deleteLecture(lecture) {
   if (!confirm(`确定删除讲义「${lecture.title}」吗？`)) return
 
   try {
-    const token = localStorage.getItem('adminToken')
-    await axios.delete(`/api/lectures/${lecture.id}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {}
-    })
+    await adminApi.delete(`/api/lectures/${lecture.id}`)
     lectures.value = lectures.value.filter(item => item.id !== lecture.id)
   } catch (e) {
     error.value = e.response?.data?.error || '删除失败'
@@ -189,10 +185,7 @@ async function assignCategory(lecture, categoryId) {
   if (!categoryId) return
   error.value = ''
   try {
-    const token = localStorage.getItem('adminToken')
-    const res = await axios.put(`/api/lectures/${lecture.id}/category`, { categoryId: Number(categoryId) }, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {}
-    })
+    const res = await adminApi.put(`/api/lectures/${lecture.id}/category`, { categoryId: Number(categoryId) })
     lectures.value = lectures.value.map(item => item.id === lecture.id ? res.data : item)
   } catch (e) {
     error.value = e.response?.data?.error || '分类更新失败'
@@ -203,10 +196,7 @@ async function togglePublic(lecture, event) {
   error.value = ''
   const isPublic = event.target.checked ? 1 : 0
   try {
-    const token = localStorage.getItem('adminToken')
-    const res = await axios.put(`/api/lectures/${lecture.id}/public`, { is_public: isPublic }, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {}
-    })
+    const res = await adminApi.put(`/api/lectures/${lecture.id}/public`, { is_public: isPublic })
     lectures.value = lectures.value.map(item => item.id === lecture.id ? res.data : item)
   } catch (e) {
     error.value = e.response?.data?.error || '更新失败'
@@ -221,10 +211,7 @@ function resetFilters() {
   filters.to = ''
 }
 
-function formatDate(value) {
-  if (!value) return '-'
-  return new Date(String(value).replace(' ', 'T')).toLocaleString('zh-CN', { hour12: false })
-}
+const formatDate = formatDateTime
 
 function openEdit(lecture) {
   editingLecture.value = lecture

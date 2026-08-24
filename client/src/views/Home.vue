@@ -247,7 +247,14 @@
           </div>
         </div>
       </div>
-      
+
+      <!-- Error State -->
+      <div v-else-if="loadError" class="empty-state">
+        <h3 class="empty-state-title">加载失败</h3>
+        <p class="empty-state-desc">内容加载失败，请检查网络后重试。</p>
+        <button type="button" class="retry-btn" @click="loadHomeData">重新加载</button>
+      </div>
+
       <!-- Empty State -->
       <div v-else-if="filteredLectures.length === 0" class="empty-state">
         <div class="empty-state-icon">
@@ -283,7 +290,7 @@
               :src="firstChapterSrc(lecture)"
               :title="`${lecture.title} 预览`"
               loading="lazy"
-              sandbox="allow-scripts allow-same-origin"
+              sandbox="allow-scripts"
             ></iframe>
             <div class="preview-fade"></div>
             <div v-if="!isLoggedIn" class="preview-lock" @click="showLoginTip">
@@ -317,12 +324,16 @@
 
 <script setup>
 import { defineAsyncComponent, reactive, ref, computed, onMounted, onUnmounted } from 'vue'
-import axios from 'axios'
+import { useRouter } from 'vue-router'
+import api from '../lib/http'
 import MarkdownIt from 'markdown-it'
-import katexPlugin from '@vscode/markdown-it-katex'
-import 'katex/dist/katex.min.css'
+import { decodeJwtPayload } from '../lib/jwt'
+import { logoutStudent } from '../utils/auth'
+import { buildChapterSrc } from '../utils/lectureUrl'
 
-const md = new MarkdownIt({ html: false }).use(katexPlugin)
+// 简介摘要的轻量渲染：不带 KaTeX（公式场景走 MarkdownPreview 组件按需加载），
+// 避免把 267KB 的 katex chunk 拖成首屏必载
+const md = new MarkdownIt({ html: false })
 
 function renderMd(text) {
   return text ? md.render(text) : ''
@@ -348,10 +359,12 @@ function closeSummaryModal() {
 
 const MarkdownPreview = defineAsyncComponent(() => import('../components/MarkdownPreview.vue'))
 
+const router = useRouter()
 const categories = ref([])
 const lectures = ref([])
 const knowledgeDocs = ref([])
 const loading = ref(true)
+const loadError = ref(false)
 const selectedCategory = ref('all')
 const isLoggedIn = ref(!!localStorage.getItem('token'))
 const studentUsername = ref(localStorage.getItem('studentUsername') || '')
@@ -363,12 +376,9 @@ let loginTipTimer = null
 
 function currentUserKey() {
   const token = localStorage.getItem('token')
-  if (!token) return 'guest'
-  try {
-    return JSON.parse(atob(token.split('.')[1])).id || localStorage.getItem('studentUsername') || 'student'
-  } catch {
-    return localStorage.getItem('studentUsername') || 'student'
-  }
+  const payload = token ? decodeJwtPayload(token) : null
+  if (payload?.id) return payload.id
+  return localStorage.getItem('studentUsername') || 'student'
 }
 
 function recentKey() {
@@ -392,19 +402,15 @@ function goLecture(lectureSlug, chapterSlug) {
     showLoginTip()
     return
   }
-  if (lectureSlug === chapterSlug) {
-    window.location.href = `/lecture/${lectureSlug}`
-  } else {
-    window.location.href = `/lecture/${lectureSlug}/${chapterSlug}`
-  }
+  // SPA 内导航，避免整页刷新（与 Hero 区 router-link 行为一致）
+  router.push(lectureSlug === chapterSlug
+    ? `/lecture/${lectureSlug}`
+    : `/lecture/${lectureSlug}/${chapterSlug}`)
 }
 
 function logout() {
-  // 清除学生登录态
-  localStorage.removeItem('token')
-  localStorage.removeItem('studentUsername')
-  // 清除管理员登录态（如果有）
-  localStorage.removeItem('adminToken')
+  // 只清学生态；管理员后台的登录态由后台自己的退出负责
+  logoutStudent()
   updateLoginState()
 }
 
@@ -443,9 +449,7 @@ function formatRecentTime(value) {
 function firstChapterSrc(lecture) {
   const chapter = lecture.chapters?.[0]
   if (!chapter?.path) return ''
-  const token = localStorage.getItem('token')
-  const query = token ? `?access_token=${encodeURIComponent(token)}` : ''
-  return `/lectures/${chapter.path}/${chapter.entry_file || 'index.html'}${query}`
+  return buildChapterSrc(lecture, chapter)
 }
 
 function previewHint(doc) {
@@ -469,31 +473,47 @@ const filteredLectures = computed(() => {
 
 const totalChapters = computed(() => lectures.value.reduce((s, l) => s + (l.chapters?.length || 0), 0))
 
-onMounted(async () => {
-  const token = localStorage.getItem('token')
-  const headers = token ? { Authorization: `Bearer ${token}` } : {}
-  const [catRes, lecRes, knowledgeRes] = await Promise.all([
-    axios.get('/api/categories'),
-    axios.get('/api/lectures', { headers }),
-    axios.get('/api/knowledge', { params: { featured: 1 } })
-  ])
-  categories.value = catRes.data
-  lectures.value = lecRes.data
-  knowledgeDocs.value = knowledgeRes.data
-  loading.value = false
-  updateLoginState()
+async function loadHomeData() {
+  loading.value = true
+  loadError.value = false
+  try {
+    const [catRes, lecRes, knowledgeRes] = await Promise.all([
+      api.get('/api/categories'),
+      api.get('/api/lectures'),
+      api.get('/api/knowledge', { params: { featured: 1 } })
+    ])
+    categories.value = catRes.data
+    lectures.value = lecRes.data
+    knowledgeDocs.value = knowledgeRes.data
+  } catch (err) {
+    // 网络错误已由 http 拦截器 toast 提示；此处置错误态给重试入口，避免永久骨架屏
+    loadError.value = true
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(() => {
+  // 监听注册放在任何 await 之前：请求期间离开页面时 onUnmounted 才能正确移除
   window.addEventListener('storage', updateLoginState)
   window.addEventListener('focus', loadRecentItems)
+  updateLoginState()
+  loadHomeData()
 })
 
 onUnmounted(() => {
   window.removeEventListener('storage', updateLoginState)
   window.removeEventListener('focus', loadRecentItems)
+  clearTimeout(loginTipTimer)
 })
 </script>
 
 <style scoped>
 /* ====== Login Tip Toast ====== */
+.empty-state-desc {
+  color: var(--color-ink-secondary);
+}
+
 .login-tip {
   position: fixed;
   top: 24px;

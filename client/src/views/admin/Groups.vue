@@ -110,7 +110,7 @@
 <script setup>
 import { onMounted, ref, computed } from 'vue'
 import adminApi from '../../lib/adminApi'
-import axios from 'axios'
+import { formatDateTime } from '../../utils/date'
 
 const groups = ref([])
 const loading = ref(false)
@@ -199,7 +199,7 @@ async function openDetail(group) {
     const [detailRes, catRes, studentsRes] = await Promise.all([
       adminApi.get(`/groups/${group.id}`),
       adminApi.get('/categories'),
-      adminApi.get('/users', { params: { pageSize: 100 } })
+      adminApi.get('/users', { params: { all: 1, role: 'student' } })
     ])
     detailStudents.value = detailRes.data.students || []
     selectedCategories.value = (detailRes.data.categories || []).map(c => c.id)
@@ -251,10 +251,7 @@ async function saveCategories() {
   }
 }
 
-function formatDate(value) {
-  if (!value) return '-'
-  return new Date(String(value).replace(' ', 'T')).toLocaleString('zh-CN', { hour12: false })
-}
+const formatDate = formatDateTime
 </script>
 
 <style scoped>

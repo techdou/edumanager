@@ -171,7 +171,7 @@ ai_learning.zip
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import axios from 'axios'
+import adminApi from '../../lib/adminApi'
 
 const router = useRouter()
 const title = ref('')
@@ -189,7 +189,7 @@ const success = ref('')
 const zipCheck = ref(null)
 
 onMounted(async () => {
-  const res = await axios.get('/api/categories')
+  const res = await adminApi.get('/categories')
   categories.value = res.data
   if (categories.value.length === 0) {
     showNewCategory.value = true
@@ -212,10 +212,7 @@ async function handleFile(e) {
   try {
     const formData = new FormData()
     formData.append('file', file.value)
-    const token = localStorage.getItem('adminToken')
-    const res = await axios.post('/api/lectures/precheck', formData, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {}
-    })
+    const res = await adminApi.post('/api/lectures/precheck', formData)
     zipCheck.value = res.data
   } catch (e) {
     error.value = e.response?.data?.error || '讲义结构预检失败'
@@ -241,10 +238,7 @@ const newCategoryName = ref('')
 async function createCategory() {
   if (!newCategoryName.value.trim()) return
   try {
-    const token = localStorage.getItem('adminToken')
-    const res = await axios.post('/api/categories', { name: newCategoryName.value.trim() }, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {}
-    })
+    const res = await adminApi.post('/categories', { name: newCategoryName.value.trim() })
     categories.value.push(res.data)
     categoryId.value = Number(res.data.id)
     newCategoryName.value = ''
@@ -292,10 +286,7 @@ async function upload() {
   if (cover.value) formData.append('cover', cover.value)
 
   try {
-    const token = localStorage.getItem('adminToken')
-    await axios.post('/api/lectures', formData, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {}
-    })
+    await adminApi.post('/api/lectures', formData)
     success.value = '上传成功！即将跳转...'
     setTimeout(() => router.push('/admin/lectures'), 1500)
   } catch (e) {

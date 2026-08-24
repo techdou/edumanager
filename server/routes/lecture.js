@@ -19,6 +19,8 @@ const JWT_SECRET = config.jwtSecret;
 const { filterAccessibleLectures, canAccessLecture } = require('../utils/permissions');
 const { extractTOC } = require('../utils/tocExtractor');
 const { atomicWriteDir } = require('../utils/fs');
+const { rebuildLectureIndex, removeLectureIndex } = require('../utils/searchIndex');
+const { processLectureHtml } = require('../utils/sanitizer');
 
 // ZIP 上传配置（临时目录统一走 config.uploadsDir，与 mkdirSync 的目录保持一致）
 const upload = multer({
@@ -481,11 +483,15 @@ router.post('/', adminAuth, (req, res, next) => {
     const zipName = path.parse(file.originalname).name;
     const extractPath = safeLecturePath(slug);
     coverPath = saveCover(cover);
+    // 内容安全管道：默认剥离脚本/内联事件/危险协议链接（表单传 sanitize=0 关闭），始终生成扫描报告
+    const sanitize = req.body.sanitize !== '0';
+    let scanReport = null;
 
     // 1) 原子写入讲义目录：先解压到 <slug>.tmp-xxx/，成功后再替换正式目录
     //    这样解压失败/中断不会留下半成品目录
     atomicWriteDir(lecturesRoot, extractPath, (tmpDir) => {
       extractLectureContent(file, tmpDir);
+      scanReport = processLectureHtml(tmpDir, fs, path, { sanitize });
     });
     // 临时上传文件已被 extractLectureContent 处理（rename 或解压），清理引用
     cleanupUpload(file);
@@ -500,8 +506,8 @@ router.post('/', adminAuth, (req, res, next) => {
     //    中途失败自动回滚，不会留下"无章节的幽灵讲义"
     const lectureId = db.transaction(() => {
       const result = db.run(`
-        INSERT INTO lectures (title, slug, zip_name, category_id, cover_path, layout_mode, is_public) VALUES (?, ?, ?, ?, ?, ?, ?)
-      `, [title, slug, zipName, categoryId, coverPath, layoutMode, isPublic]);
+        INSERT INTO lectures (title, slug, zip_name, category_id, cover_path, layout_mode, is_public, scan_report) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `, [title, slug, zipName, categoryId, coverPath, layoutMode, isPublic, JSON.stringify(scanReport)]);
       const newLectureId = result.lastInsertRowid;
 
       const usedSlugs = new Set();
@@ -518,6 +524,7 @@ router.post('/', adminAuth, (req, res, next) => {
     });
 
     const chapters = db.query('SELECT * FROM chapters WHERE lecture_id = ? ORDER BY order_index', [lectureId]);
+    rebuildLectureIndex(lectureId);
 
     res.json({
       id: lectureId,
@@ -525,6 +532,8 @@ router.post('/', adminAuth, (req, res, next) => {
       slug,
       layout_mode: layoutMode,
       cover_url: coverPath ? `/api/lectures/${lectureId}/cover` : null,
+      sanitized: sanitize,
+      scan_report: scanReport,
       chapters
     });
 
@@ -569,6 +578,7 @@ router.delete('/:id', adminAuth, (req, res) => {
     db.run('DELETE FROM chapters WHERE lecture_id = ?', [id]);
     db.run('DELETE FROM lectures WHERE id = ?', [id]);
   });
+  removeLectureIndex(id);
 
   // 删除文件目录（DB 已提交，文件删除失败只记日志）
   const lecturePath = safeLecturePath(lecture.slug);
@@ -719,6 +729,7 @@ router.put('/:id', adminAuth, (req, res, next) => {
   }
 
   let coverPath = lecture.cover_path;
+  let newScanReport = null;
   try {
     // 处理新封面上传
     if (cover) {
@@ -732,7 +743,7 @@ router.put('/:id', adminAuth, (req, res, next) => {
     const activeSlug = newSlug || oldSlug;
 
     // === 阶段 1：文件系统操作（事务外，因为涉及外部解压）===
-    // 内容重传：原子写入，避免半成品目录
+    // 内容重传：原子写入，避免半成品目录；同上传走安全管道
     let rebuiltChapters = null;
     if (file) {
       const isZip = file.originalname.toLowerCase().endsWith('.zip');
@@ -743,10 +754,14 @@ router.put('/:id', adminAuth, (req, res, next) => {
       }
 
       const extractPath = safeLecturePath(activeSlug);
+      const sanitize = req.body.sanitize !== '0';
+      let scanReport = null;
       atomicWriteDir(lecturesRoot, extractPath, (tmpDir) => {
         extractLectureContent(file, tmpDir);
+        scanReport = processLectureHtml(tmpDir, fs, path, { sanitize });
       });
       cleanupUpload(file);
+      newScanReport = JSON.stringify(scanReport);
 
       const chapterCandidates = buildChapterCandidates(extractPath);
       if (chapterCandidates.length === 0) {
@@ -806,6 +821,7 @@ router.put('/:id', adminAuth, (req, res, next) => {
       if (newSlug) { updateFields.push('slug = ?'); updateValues.push(newSlug); }
       if (categoryId) { updateFields.push('category_id = ?'); updateValues.push(categoryId); }
       if (coverPath !== lecture.cover_path) { updateFields.push('cover_path = ?'); updateValues.push(coverPath); }
+      if (newScanReport !== null) { updateFields.push('scan_report = ?'); updateValues.push(newScanReport); }
       updateFields.push('layout_mode = ?'); updateValues.push(layoutMode);
       updateFields.push('is_public = ?'); updateValues.push(isPublic);
       updateValues.push(id);
@@ -813,7 +829,7 @@ router.put('/:id', adminAuth, (req, res, next) => {
     });
 
     const updated = db.get(`
-      SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.layout_mode, l.is_public, l.created_at,
+      SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.layout_mode, l.is_public, l.scan_report, l.created_at,
              c.name as category_name
       FROM lectures l
       LEFT JOIN categories c ON l.category_id = c.id
@@ -823,6 +839,8 @@ router.put('/:id', adminAuth, (req, res, next) => {
       SELECT id, lecture_id, title, slug, path, entry_file, order_index
       FROM chapters WHERE lecture_id = ? ORDER BY order_index
     `, [id]);
+    // 标题/slug/内容/章节都可能变了，重建全文索引
+    rebuildLectureIndex(id);
     res.json(getPublicLecture(updated));
   } catch (err) {
     logger.error({ reqId: req.id, id, err: err && err.stack ? err.stack : String(err) }, 'lecture_update_error');
@@ -871,6 +889,7 @@ router.put('/:id/chapters', adminAuth, (req, res) => {
         db.run('UPDATE chapters SET title = ?, order_index = ? WHERE id = ?', [title, index, chapter.id]);
       });
     });
+    rebuildLectureIndex(id);
 
     const updated = db.get(`
       SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.layout_mode, l.is_public, l.created_at,

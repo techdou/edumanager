@@ -130,15 +130,18 @@
           <div class="skeleton" style="height: 200px"></div>
         </div>
         
-        <iframe 
+        <iframe
           v-else-if="currentSrc"
           ref="viewerFrame"
           :src="currentSrc"
           class="viewer-frame"
-          sandbox="allow-scripts allow-same-origin"
+          sandbox="allow-scripts"
           @load="onIframeLoad"
           @error="iframeError = true"
         />
+        <!-- 进度/TOC 跟踪脚本由后端静态服务注入（utils/lectureInjector），
+             经 postMessage 通信，因此 iframe 无需 allow-same-origin —— 讲义内
+             任何脚本都摸不到主站的 localStorage/token -->
         
         <div v-else-if="iframeError" class="empty-state">
           <div class="empty-state-icon" aria-hidden="true">
@@ -171,6 +174,8 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import api, { showToast } from '../lib/http'
+import { decodeJwtPayload } from '../lib/jwt'
+import { buildChapterSrc } from '../utils/lectureUrl'
 import { printIframe } from '../utils/exporter.js'
 
 const route = useRoute()
@@ -206,26 +211,13 @@ const recentKeyPrefix = 'edumanager:recentLectures'
 
 function currentUserKey() {
   const token = localStorage.getItem('token')
-  if (!token) return 'guest'
-  try {
-    return JSON.parse(atob(token.split('.')[1])).id || localStorage.getItem('studentUsername') || 'student'
-  } catch {
-    return localStorage.getItem('studentUsername') || 'student'
-  }
+  const payload = token ? decodeJwtPayload(token) : null
+  if (payload?.id) return payload.id
+  return localStorage.getItem('studentUsername') || 'student'
 }
 
 function recentKey() {
   return `${recentKeyPrefix}:${currentUserKey()}`
-}
-
-function authHeaders() {
-  const token = localStorage.getItem('token')
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
-
-function accessQuery() {
-  const token = localStorage.getItem('token')
-  return token ? `?access_token=${encodeURIComponent(token)}` : ''
 }
 
 const currentPath = computed(() => {
@@ -237,7 +229,7 @@ const currentPath = computed(() => {
 const currentSrc = computed(() => {
   const chapter = chapters.value.find(item => item.slug === currentChapter.value)
   if (!chapter?.path) return ''
-  return `/lectures/${chapter.path}/${chapter.entry_file || 'index.html'}${accessQuery()}`
+  return buildChapterSrc(lecture.value, chapter)
 })
 
 function syncViewportMode() {
@@ -246,12 +238,32 @@ function syncViewportMode() {
 }
 
 function handleTocMessage(e) {
+  // sandbox(无 allow-same-origin) iframe 的 origin 序列化为 'null'；同源兜底留给未沙箱场景
+  if (e.origin !== window.location.origin && e.origin !== 'null') return
+  if (e.data?.type === 'viewer-hello') {
+    // 查看器脚本就绪握手：下发已保存的阅读进度
+    sendToViewer({ type: 'init-progress', progress: readProgress.value })
+    return
+  }
   if (e.data?.type === 'toc-active') {
     activeAnchor.value = e.data.anchor
   }
   if (e.data?.type === 'reading-progress') {
     readProgress.value = Math.max(0, Math.min(100, Math.round(Number(e.data.progress) || 0)))
     saveRecentLecture()
+  }
+}
+
+function sendToViewer(msg) {
+  const frame = viewerFrame.value
+  if (!frame?.contentWindow) return false
+  try {
+    // 沙箱 iframe 的 origin 是 opaque，只能用 '*'；消息不含敏感内容，接收端校验来源
+    frame.contentWindow.postMessage(msg, '*')
+    return true
+  } catch {
+    // iframe 未就绪或已卸载
+    return false
   }
 }
 
@@ -304,7 +316,12 @@ function isModuleActive(module) {
   return module.sections?.some(section => section.anchor === activeAnchor.value)
 }
 
+// 请求序号守卫：快速切换讲义/章节时，晚到的旧响应直接丢弃，
+// 避免旧数据覆盖新数据（TOC 显示成上一个章节、进度条被重置）
+let loadSeq = 0
+
 async function loadLecture() {
+  const seq = ++loadSeq
   loading.value = true
   toc.value = null
   activeAnchor.value = ''
@@ -312,11 +329,12 @@ async function loadLecture() {
   iframeError.value = false
 
   try {
-    const res = await api.get('/api/lectures', { headers: authHeaders() })
-    const list = Array.isArray(res.data) ? res.data : []
-    lecture.value = list.find(l => l && l.slug === slug.value) || null
+    // 详情接口只返回这一份讲义，替代原来的"拉全量列表再 find"
+    const res = await api.get(`/api/lectures/detail/${slug.value}`)
+    if (seq !== loadSeq) return
+    const data = res.data
+    lecture.value = data && data.slug ? data : null
     chapters.value = lecture.value?.chapters || []
-    restoreSavedProgress()
 
     // 讲义不存在或无权限：给出明确提示而非空白
     if (!lecture.value) {
@@ -325,117 +343,50 @@ async function loadLecture() {
       return
     }
 
-    // 尝试加载当前章节的 TOC（失败不影响主流程）
-    if (currentPath.value && !nativeLayout.value) {
-      try {
-        const tocRes = await api.get(`/api/lectures/toc/${slug.value}/${currentChapter.value}`, { headers: authHeaders() })
-        toc.value = tocRes.data && tocRes.data.modules ? tocRes.data : null
-      } catch {
-        toc.value = null
-      }
-    }
+    restoreSavedProgress()
+    loadToc()
   } catch (err) {
+    if (seq !== loadSeq) return
     // 网络/服务错误已由 http 拦截器提示；此处仅保证 UI 不崩
     lecture.value = null
     chapters.value = []
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
+  }
+}
+
+let tocSeq = 0
+const loadedTocKey = ref('')
+
+async function loadToc() {
+  const seq = ++tocSeq
+  const key = `${slug.value}/${currentChapter.value}`
+  toc.value = null
+  activeAnchor.value = ''
+  if (!currentPath.value || nativeLayout.value) return
+  try {
+    // 尝试加载当前章节的 TOC（失败不影响主流程）
+    const tocRes = await api.get(`/api/lectures/toc/${slug.value}/${currentChapter.value}`)
+    if (seq !== tocSeq || key !== `${slug.value}/${currentChapter.value}`) return
+    toc.value = tocRes.data && tocRes.data.modules ? tocRes.data : null
+    loadedTocKey.value = key
+  } catch {
+    if (seq === tocSeq) toc.value = null
   }
 }
 
 function onIframeLoad() {
-  // 检测 iframe 是否加载了 404 或非预期内容
-  if (viewerFrame.value) {
-    try {
-      const doc = viewerFrame.value.contentDocument
-      // 如果内容是 SPA index.html（包含 #app），说明讲义文件不存在
-      if (doc && doc.querySelector('#app') && !doc.querySelector('.lecture-content, .markdown-body, article, main')) {
-        iframeError.value = true
-        return
-      }
-    } catch {
-      // cross-origin，无法检测，不处理
-    }
-  }
-  
-  if (!viewerFrame.value) return
-  
-  const iframe = viewerFrame.value
-  try {
-    const doc = iframe.contentDocument
-    if (!doc) return
-    const savedProgress = readProgress.value
-    
-    // Inject scroll tracker into iframe
-    const script = doc.createElement('script')
-    script.textContent = `
-      (function() {
-        let ticking = false;
-        const headings = document.querySelectorAll('h1[id], h2[id], h3[id], h4[id]');
-        const initialProgress = ${JSON.stringify(savedProgress)};
-        
-        function sendReadingState() {
-          const scrollTop = window.scrollY || document.documentElement.scrollTop;
-          const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
-          let active = '';
-          
-          for (let i = headings.length - 1; i >= 0; i--) {
-            const el = headings[i];
-            const rect = el.getBoundingClientRect();
-            if (rect.top <= 120) {
-              active = '#' + el.id;
-              break;
-            }
-          }
-          
-          window.parent.postMessage({ type: 'toc-active', anchor: active }, '*');
-          window.parent.postMessage({ type: 'reading-progress', progress: Math.min(100, (scrollTop / maxScroll) * 100) }, '*');
-        }
-
-        function restoreProgress() {
-          if (!initialProgress || initialProgress <= 0) {
-            sendReadingState();
-            return;
-          }
-          const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
-          window.scrollTo(0, maxScroll * Math.min(100, initialProgress) / 100);
-          setTimeout(sendReadingState, 80);
-        }
-        
-        window.addEventListener('scroll', function() {
-          if (!ticking) {
-            ticking = true;
-            requestAnimationFrame(function() {
-              sendReadingState();
-              ticking = false;
-            });
-          }
-        });
-        
-        // Restore saved progress after layout settles.
-        setTimeout(restoreProgress, 120);
-      })();
-    `
-    doc.head.appendChild(script)
-  } catch (e) {
-    // Cross-origin or sandbox restriction
-  }
+  // 进度/TOC 脚本已由后端注入 HTML（见 utils/lectureInjector 通信协议）。
+  // iframe 无 allow-same-origin，无法读 contentDocument；
+  // 双保险：load 事件 + viewer-hello 握手各发一次初始进度
+  sendToViewer({ type: 'init-progress', progress: readProgress.value })
 }
 
 function scrollToAnchor(anchor) {
   if (!viewerFrame.value) return
-  try {
-    const doc = viewerFrame.value.contentDocument
-    if (!doc) return
-    const el = doc.querySelector(anchor)
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      activeAnchor.value = anchor
-      if (isMobile.value) sidebarCollapsed.value = true
-    }
-  } catch {
-    // fallback: set iframe src with hash
-    viewerFrame.value.src = `${currentSrc.value}${anchor}`
+  const ok = sendToViewer({ type: 'scroll-to', anchor })
+  if (ok) {
+    activeAnchor.value = anchor
     if (isMobile.value) sidebarCollapsed.value = true
   }
 }
@@ -455,7 +406,19 @@ onUnmounted(() => {
 })
 
 watch(slug, () => loadLecture())
-watch(currentChapter, () => loadLecture())
+watch(currentChapter, (chapter) => {
+  if (lecture.value && chapters.value.some(item => item.slug === chapter)) {
+    // 同一讲义内切章节：只重置进度 + 重拉 TOC，不重拉讲义元数据
+    readProgress.value = 0
+    iframeError.value = false
+    restoreSavedProgress()
+    if (loadedTocKey.value !== `${slug.value}/${chapter}`) {
+      loadToc()
+    }
+  } else {
+    loadLecture()
+  }
+})
 </script>
 
 <style scoped>

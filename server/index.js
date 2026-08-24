@@ -8,12 +8,16 @@ const config = require('./config');
 const logger = require('./logger');
 const { optionalStudentAuth } = require('./middleware/studentAuth');
 const { canAccessLecture } = require('./utils/permissions');
+const { serveInjectedHtml, isHtmlFile } = require('./utils/lectureInjector');
 
 const authRoutes = require('./routes/auth');
 const lectureRoutes = require('./routes/lecture');
 const categoryRoutes = require('./routes/category');
 const adminRoutes = require('./routes/admin');
 const knowledgeRoutes = require('./routes/knowledge');
+const searchRoutes = require('./routes/search');
+const progressRoutes = require('./routes/progress');
+const notesRoutes = require('./routes/notes');
 
 const app = express();
 const PORT = config.port;
@@ -38,6 +42,9 @@ app.use('/api/lectures', lectureRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/knowledge', knowledgeRoutes);
+app.use('/api/search', searchRoutes);
+app.use('/api/progress', progressRoutes);
+app.use('/api/notes', notesRoutes);
 
 // 健康检查（无需鉴权，供负载均衡/监控探活）
 app.get('/health', (req, res) => {
@@ -63,6 +70,11 @@ app.get('/lectures/:lectureSlug/*', optionalStudentAuth, (req, res) => {
   // 命中目录时 sendFile 会抛 ERR_FS_EISDIR 落到 500，这里提前转成 404
   if (!fs.statSync(requested).isFile()) {
     return res.status(404).send('File not found');
+  }
+  // HTML 响应注入统一进度跟踪脚本：iframe 无需 allow-same-origin 即可上报阅读进度
+  if (isHtmlFile(requested)) {
+    serveInjectedHtml(requested, res);
+    return;
   }
   res.sendFile(requested);
 });
@@ -124,6 +136,9 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 // 启动数据库并监听（db.init 为同步，包裹 try/catch）
 try {
   db.init();
+  // 全文搜索索引：老库首次接入时自动补建（FTS 空 + 有讲义时触发一次全量重建）
+  const { initSearchIndex } = require('./utils/searchIndex');
+  initSearchIndex();
   // 启动时自动备份一次（仅生产，避免开发时频繁备份）。backup 是异步的，失败仅记日志不阻塞启动
   if (config.isProd) {
     db.backup('.startup').catch(() => {});

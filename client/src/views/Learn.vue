@@ -39,6 +39,12 @@
           </div>
         </div>
 
+        <div v-else-if="loadError" class="empty-state">
+          <h3 class="empty-state-title">加载失败</h3>
+          <p class="empty-state-desc">讲义列表加载失败，请检查网络后重试。</p>
+          <button type="button" class="retry-btn" @click="loadMyLectures">重新加载</button>
+        </div>
+
         <div v-else-if="lectures.length === 0" class="empty-state">
           <div class="empty-state-icon">
             <svg width="64" height="64" viewBox="0 0 64 64" fill="none"><rect x="8" y="16" width="48" height="36" rx="4" fill="oklch(0.9 0.02 260)" stroke="oklch(0.7 0.02 260)" stroke-width="2"/><path d="M8 28H56" stroke="oklch(0.7 0.02 260)" stroke-width="2"/><rect x="14" y="34" width="16" height="4" rx="2" fill="oklch(0.7 0.02 260)" opacity="0.5"/></svg>
@@ -54,7 +60,7 @@
               <div v-for="lecture in group.lectures" :key="lecture.id" class="lecture-card card">
                 <div v-if="lecture.cover_url || firstChapterSrc(lecture)" class="resource-preview lecture-preview">
                   <img v-if="lecture.cover_url" class="cover-image" :src="lecture.cover_url" :alt="`${lecture.title} 封面`" loading="lazy" />
-                  <iframe v-else :src="firstChapterSrc(lecture)" :title="`${lecture.title} 预览`" loading="lazy" sandbox="allow-scripts allow-same-origin"></iframe>
+                  <iframe v-else :src="firstChapterSrc(lecture)" :title="`${lecture.title} 预览`" loading="lazy" sandbox="allow-scripts"></iframe>
                   <div class="preview-fade"></div>
                 </div>
                 <div class="lecture-header">
@@ -85,11 +91,14 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import axios from 'axios'
+import api from '../lib/http'
+import { logoutStudent } from '../utils/auth'
+import { buildChapterSrc } from '../utils/lectureUrl'
 
 const router = useRouter()
 const lectures = ref([])
 const loading = ref(true)
+const loadError = ref(false)
 const studentUsername = ref(localStorage.getItem('studentUsername') || '')
 
 function updateLoginState() {
@@ -97,17 +106,14 @@ function updateLoginState() {
 }
 
 function logout() {
-  localStorage.removeItem('token')
-  localStorage.removeItem('studentUsername')
+  logoutStudent()
   router.push('/')
 }
 
 function firstChapterSrc(lecture) {
   const chapter = lecture.chapters?.[0]
   if (!chapter?.path) return ''
-  const token = localStorage.getItem('token')
-  const query = token ? `?access_token=${encodeURIComponent(token)}` : ''
-  return `/lectures/${chapter.path}/${chapter.entry_file || 'index.html'}${query}`
+  return buildChapterSrc(lecture, chapter)
 }
 
 const groupedLectures = computed(() => {
@@ -120,20 +126,29 @@ const groupedLectures = computed(() => {
   return [...map.entries()].map(([categoryName, lectures]) => ({ categoryName, lectures }))
 })
 
-onMounted(async () => {
-  const token = localStorage.getItem('token')
-  if (!token) { router.push('/'); return }
+async function loadMyLectures() {
+  loading.value = true
+  loadError.value = false
   try {
-    const res = await axios.get('/api/lectures/my', {
-      headers: { Authorization: `Bearer ${token}` }
-    })
+    const res = await api.get('/api/lectures/my')
     lectures.value = res.data
   } catch (e) {
-    if (e.response?.status === 401) router.push('/')
+    if (e.response?.status === 401) {
+      router.push('/')
+    } else {
+      // 网络/服务错误：显示错误态而非伪装成"暂无讲义"
+      loadError.value = true
+    }
   } finally {
     loading.value = false
   }
+}
+
+onMounted(() => {
+  const token = localStorage.getItem('token')
+  if (!token) { router.push('/'); return }
   window.addEventListener('storage', updateLoginState)
+  loadMyLectures()
 })
 
 onUnmounted(() => {

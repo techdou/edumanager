@@ -26,6 +26,12 @@
 
         <div v-if="loading" style="padding: 40px; text-align: center; color: var(--color-ink-tertiary);">加载中...</div>
 
+        <div v-else-if="loadError" class="empty-state">
+          <h3 class="empty-state-title">加载失败</h3>
+          <p class="empty-state-desc">个人信息加载失败，请检查网络后重试。</p>
+          <button type="button" class="retry-btn" @click="loadProfile">重新加载</button>
+        </div>
+
         <template v-else-if="profile">
           <div v-if="message" :class="['alert-banner', messageType]">
             <svg v-if="messageType === 'success'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
@@ -111,11 +117,14 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import axios from 'axios'
+import api from '../lib/http'
+import { logoutStudent } from '../utils/auth'
+import { formatDateTime } from '../utils/date'
 
 const router = useRouter()
 const profile = ref(null)
 const loading = ref(true)
+const loadError = ref(false)
 const editing = ref(false)
 const saving = ref(false)
 const message = ref('')
@@ -123,15 +132,11 @@ const messageType = ref('')
 const editForm = ref({ real_name: '', email: '' })
 
 function logout() {
-  localStorage.removeItem('token')
-  localStorage.removeItem('studentUsername')
+  logoutStudent()
   router.push('/')
 }
 
-function formatDate(value) {
-  if (!value) return '-'
-  return new Date(String(value).replace(' ', 'T')).toLocaleString('zh-CN', { hour12: false })
-}
+const formatDate = formatDateTime
 
 function startEdit() {
   editForm.value = {
@@ -151,12 +156,9 @@ async function saveProfile() {
   saving.value = true
   message.value = ''
   try {
-    const token = localStorage.getItem('token')
-    const res = await axios.put('/api/auth/student/profile', {
+    const res = await api.put('/api/auth/student/profile', {
       real_name: editForm.value.real_name.trim() || null,
       email: editForm.value.email.trim() || null
-    }, {
-      headers: { Authorization: `Bearer ${token}` }
     })
     profile.value = res.data
     editing.value = false
@@ -170,19 +172,27 @@ async function saveProfile() {
   }
 }
 
-onMounted(async () => {
-  const token = localStorage.getItem('token')
-  if (!token) { router.push('/'); return }
+async function loadProfile() {
+  loading.value = true
+  loadError.value = false
   try {
-    const res = await axios.get('/api/auth/student/profile', {
-      headers: { Authorization: `Bearer ${token}` }
-    })
+    const res = await api.get('/api/auth/student/profile')
     profile.value = res.data
   } catch (e) {
-    if (e.response?.status === 401) router.push('/')
+    if (e.response?.status === 401) {
+      router.push('/')
+    } else {
+      loadError.value = true
+    }
   } finally {
     loading.value = false
   }
+}
+
+onMounted(() => {
+  const token = localStorage.getItem('token')
+  if (!token) { router.push('/'); return }
+  loadProfile()
 })
 </script>
 
