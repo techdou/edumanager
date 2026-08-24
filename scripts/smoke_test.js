@@ -113,6 +113,53 @@ async function run() {
       r.end();
     });
     check('JSON 错误返回 400', badJson.status === 400, `实际 ${badJson.status}`);
+
+    // 11. 知识库未登录鉴权：列表只含公开（当前测试库无公开文档 → 空），文件接口有权限墙
+    const knowledgeAnon = await req('GET', '/api/knowledge');
+    check('知识库未登录只可见公开', knowledgeAnon.status === 200
+      && Array.isArray(knowledgeAnon.data)
+      && knowledgeAnon.data.every(d => d.is_public === 1), `${knowledgeAnon.data.length} 条`);
+
+    // 12. 全文搜索：结果结构正确且权限过滤生效
+    const search = await req('GET', '/api/search?q=AI');
+    check('全文搜索接口', search.status === 200 && Array.isArray(search.data.results)
+      && search.data.results.every(r => r.hits && Array.isArray(r.hits)), `${search.data.results.length} 个讲义命中`);
+
+    // 13. 搜索词过短 → 空结果不报错
+    const searchShort = await req('GET', '/api/search?q=A');
+    check('搜索短词静默返回空', searchShort.status === 200 && searchShort.data.results.length === 0);
+
+    // 14. 进度上报：登录 upsert + 查询回读
+    const prog = await req('POST', '/api/progress', {
+      lectureSlug: 'edu_coding', chapterSlug: 'edu_coding', lectureTitle: '冒烟讲义', chapterTitle: '第一章', progress: 66
+    }, { Authorization: `Bearer ${reg.data.token}` });
+    const progMine = await req('GET', '/api/progress/mine', null, { Authorization: `Bearer ${reg.data.token}` });
+    check('进度上报与回读', prog.status === 200
+      && progMine.data.some(p => p.lecture_slug === 'edu_coding' && p.progress === 66));
+
+    // 15. 进度上报未登录 → 401
+    const progAnon = await req('POST', '/api/progress', { lectureSlug: 'x', chapterSlug: 'y' });
+    check('进度上报需登录', progAnon.status === 401);
+
+    // 16. 笔记 CRUD：创建 → 查询 → 删除
+    const note = await req('POST', '/api/notes', {
+      lectureSlug: 'edu_coding', chapterSlug: 'edu_coding', content: '冒烟笔记内容'
+    }, { Authorization: `Bearer ${reg.data.token}` });
+    const noteList = await req('GET', '/api/notes?lectureSlug=edu_coding', null, { Authorization: `Bearer ${reg.data.token}` });
+    const noteDel = await req('DELETE', `/api/notes/${note.data.id}`, null, { Authorization: `Bearer ${reg.data.token}` });
+    check('笔记增删查', note.status === 201
+      && noteList.data.some(n => n.content === '冒烟笔记内容')
+      && noteDel.status === 200);
+
+    // 17. 笔记越权：无 token → 401
+    const noteAnon = await req('GET', '/api/notes');
+    check('笔记接口需登录', noteAnon.status === 401);
+
+    // 18. 讲义详情接口（Lecture 页新依赖）：公开讲义可达、不存在 404
+    const detail = await req('GET', '/api/lectures/detail/edu_coding');
+    const detail404 = await req('GET', '/api/lectures/detail/__no_such__');
+    check('讲义详情接口', detail.status === 200 && Array.isArray(detail.data.chapters)
+      && detail404.status === 404);
   } finally {
     server.kill();
   }

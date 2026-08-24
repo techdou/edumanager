@@ -85,6 +85,17 @@
           </div>
 
           <div class="form-group">
+            <label class="form-label">内容安全</label>
+            <label class="layout-option" style="padding: 12px 16px;">
+              <input v-model="sanitize" type="checkbox" />
+              <span>
+                <strong>自动清除讲义中的脚本和不安全属性</strong>
+                <small>关闭后仅扫描并报告风险，不会修改讲义 HTML</small>
+              </span>
+            </label>
+          </div>
+
+          <div class="form-group">
             <label class="form-label">封面图（可选）</label>
             <div class="file-upload">
               <input type="file" @change="handleCover" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" class="file-input" />
@@ -131,6 +142,26 @@
           <div v-if="success" class="success-alert">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
             <span>{{ success }}</span>
+          </div>
+
+          <div v-if="success && scanReport" class="scan-report" :class="{ risky: (scanReport.risky || 0) > 0 }">
+            <template v-if="(scanReport.risky || 0) > 0">
+              <div class="scan-header">
+                <strong>内容安全扫描</strong>
+                <span class="scan-badge">发现 {{ scanReport.risky }} 处风险项</span>
+              </div>
+              <div class="scan-stats">
+                <span>脚本 {{ scanReport.scripts || 0 }}</span>
+                <span>事件属性 {{ scanReport.eventAttrs || 0 }}</span>
+                <span>危险链接 {{ (scanReport.jsUrls || 0) + (scanReport.dataHtmlUrls || 0) }}</span>
+                <span>涉及文件 {{ scanReport.files || 0 }}</span>
+              </div>
+              <div v-if="scanReport.externalHosts && scanReport.externalHosts.length" class="scan-hosts">
+                <span v-for="host in scanReport.externalHosts.slice(0, 10)" :key="host" class="host-badge">{{ host }}</span>
+                <span v-if="scanReport.externalHosts.length > 10" class="host-more">+{{ scanReport.externalHosts.length - 10 }}</span>
+              </div>
+            </template>
+            <p v-else class="scan-ok">内容安全扫描通过</p>
           </div>
 
           <button @click="upload" class="btn btn-primary" :disabled="uploading || precheckLoading">
@@ -181,6 +212,8 @@ const file = ref(null)
 const cover = ref(null)
 const layoutMode = ref('system')
 const isPublic = ref(false)
+const sanitize = ref(true)
+const scanReport = ref(null)
 const categories = ref([])
 const uploading = ref(false)
 const precheckLoading = ref(false)
@@ -275,6 +308,7 @@ async function upload() {
 
   uploading.value = true
   error.value = ''
+  scanReport.value = null
 
   const formData = new FormData()
   formData.append('file', file.value)
@@ -283,12 +317,16 @@ async function upload() {
   formData.append('categoryId', categoryId.value)
   formData.append('layoutMode', layoutMode.value)
   formData.append('isPublic', isPublic.value ? '1' : '0')
+  formData.append('sanitize', sanitize.value ? '1' : '0')
   if (cover.value) formData.append('cover', cover.value)
 
   try {
-    await adminApi.post('/api/lectures', formData)
+    const res = await adminApi.post('/api/lectures', formData)
+    scanReport.value = res.data?.scan_report || null
+    const risky = scanReport.value?.risky || 0
     success.value = '上传成功！即将跳转...'
-    setTimeout(() => router.push('/admin/lectures'), 1500)
+    // 有风险项时多停留几秒，让管理员看清扫描报告
+    setTimeout(() => router.push('/admin/lectures'), risky > 0 ? 5000 : 1500)
   } catch (e) {
     const status = e.response?.status
     const msg = e.response?.data?.error
@@ -584,6 +622,92 @@ async function upload() {
   border: 1px solid oklch(0.85 0.05 145);
   color: var(--color-success);
   font-size: var(--text-sm);
+}
+
+.scan-report {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+}
+
+.scan-report.risky {
+  border-color: #ffd4d0;
+  background: #fff4f2;
+}
+
+.scan-ok {
+  margin: 0;
+  color: var(--color-success);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.scan-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.scan-header strong {
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+}
+
+.scan-badge {
+  padding: var(--space-1) var(--space-2);
+  border-radius: 999px;
+  background: #b42318;
+  color: #ffffff;
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.scan-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.scan-stats span {
+  padding: var(--space-1) var(--space-2);
+  border-radius: 999px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-ink-secondary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.scan-hosts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.host-badge {
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-ink-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-more {
+  color: var(--color-ink-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 700;
 }
 
 .precheck-panel {

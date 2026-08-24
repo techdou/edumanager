@@ -1,240 +1,45 @@
-# EduManager 功能优化与架构改进方案
+# EduManager 功能规划与架构路线
 
-## 现状分析
+> 2026-08-25 重写：旧版 ROADMAP 中的"sql.js 内存库迁移 PostgreSQL / Next.js / Prisma"等描述
+> 已过时（现为 better-sqlite3 + WAL 持久化，无 Next.js）。本文档反映当前实际状态。
 
-### 当前架构
-- **前端**: Vue 3 + Vite (client/)，Next.js (src/)
-- **后端**: Express + sql.js (SQLite)
-- **部署**: 腾讯云 (edu.techdou.com)
+## 已完成（2026-08 全量 review 后落地）
 
-### 已完成功能
-- ✅ 讲义上传/管理/展示
-- ✅ 分类系统
-- ✅ 学生登录/注册
-- ✅ 管理后台 (Dashboard, Upload, Categories, Users, Stats)
-- ✅ 章节目录导航
-- ✅ 响应式设计
+### 安全加固
+- [x] 知识库读接口鉴权（is_public / 班级分类权限 / 管理员），管理端可设公开开关
+- [x] 上传文件名路径穿越防护（basename + 白名单）；ZIP 解压 adm-zip 降级路径带 ZIP slip 防护
+- [x] JWT_SECRET 缺失拒绝启动（无兜底密钥）；multer 升级 2.x（修复 DoS CVE）
+- [x] 上传内容安全管道：默认剥离讲义 HTML 中的脚本/内联事件/危险协议链接，生成扫描报告
+- [x] iframe 沙箱收紧：进度/TOC 跟踪脚本改由服务端注入，三处 iframe 全部仅 allow-scripts
+- [x] 改密码后旧 token 立即失效（pwd_updated_at）；登录页显式身份选择
 
----
+### 正确性与性能
+- [x] 数据库备份 async 化（修复失败误报成功）；LECTURES_DIR 与静态服务统一
+- [x] 讲义/用户列表 N+1 查询批量化；TOC 提取 mtime 缓存；bcrypt 异步化
+- [x] 前端 JWT base64url 正确解码（修复概率性"随机踢人"）；Lecture 页竞态守卫 + 详情接口
+- [x] 首页/学习中心/个人中心加载失败错误态 + 重试；KaTeX 移出首屏；系统字体栈替代 Google Fonts
 
-## 建议添加的功能
+### 新功能
+- [x] **F1 全文搜索**：SQLite FTS5（unicode61，中文短语匹配），`GET /api/search`，首页搜索框带章节定位和高亮片段，权限过滤与讲义列表一致
+- [x] **F2 内容安全管道**：`server/utils/sanitizer.js` 扫描+消毒，上传表单消毒开关，扫描报告入库（lectures.scan_report）并在上传结果展示
+- [x] **F3 学习数据看板**：`user_progress` 表 + Lecture 页节流上报；管理端 Stats 页新增班级×讲义完成率矩阵、断点续学名单（7 天未回访）、卡点章节 Top10
+- [x] **F4 章节笔记**：`notes` 表 + CRUD API（`/api/notes`，仅本人可改删）；Lecture 页笔记抽屉
+- [x] **F5 CI**：GitHub Actions（服务端语法检查 + 前端 vitest + vite build）
+- [x] **F6 PWA 离线阅读**：manifest + Service Worker（讲义 cache-first、外壳 network-first、API 不缓存），打开过的讲义离线可读
 
-### 1. 学习进度追踪 (高优先级)
-```
-功能:
-- 学生阅读进度记录
-- 章节完成状态
-- 学习时长统计
-- 最后阅读位置记忆
+## 后续候选（未排期）
 
-数据库表:
-- user_progress: user_id, lecture_id, chapter_id, completed, read_time, last_position
-- user_stats: user_id, total_read_time, lectures_completed, chapters_completed
-```
+| 方向 | 说明 | 前置 |
+|---|---|---|
+| 讲义访问票据 | 用一次性短时 ticket 替换 iframe URL 里的 access_token（目前已收敛到 utils/lectureUrl.js 单一出口） | 无 |
+| 测验/错题本 | 章节末测验、自动评分、错题本 | user_progress 已就绪 |
+| 评论/讨论区 | 每章讨论、管理员回复 | 无 |
+| 通知系统 | 新讲义上架通知（站内信即可起步，WebSocket 可后置） | 无 |
+| 对象存储迁移 | 讲义文件迁腾讯云 COS + CDN | 讲义量大到本地盘吃紧时再做 |
+| 运维监控 | Sentry 前端错误上报 + 服务器 uptime 监控 | 无 |
 
-### 2. 搜索功能 (高优先级)
-```
-功能:
-- 全文搜索讲义内容
-- 按标题/分类/内容搜索
-- 搜索结果高亮
-- 搜索历史
+## 明确不做（当前规模下的过度设计）
 
-实现:
-- 后端: 用 sql.js 的 FTS (Full Text Search)
-- 前端: 搜索框 + 结果页
-```
-
-### 3. 笔记/标注系统 (中优先级)
-```
-功能:
-- 学生在讲义上添加笔记
-- 高亮/划线
-- 笔记列表页
-- 导出笔记
-
-数据库表:
-- notes: id, user_id, lecture_id, chapter_id, content, position, created_at
-```
-
-### 4. 测验/练习系统 (中优先级)
-```
-功能:
-- 每章末尾添加测验
-- 选择题/填空题
-- 自动评分
-- 错题本
-- 成绩统计
-
-数据库表:
-- quizzes: id, chapter_id, questions (JSON)
-- quiz_attempts: id, user_id, quiz_id, answers, score, completed_at
-```
-
-### 5. 评论/讨论区 (中优先级)
-```
-功能:
-- 每章讨论区
-- 学生提问/回答
-- 管理员回复
-- 点赞/踩
-
-数据库表:
-- comments: id, chapter_id, user_id, content, parent_id, created_at
-```
-
-### 6. 通知系统 (中优先级)
-```
-功能:
-- 新讲义上架通知
-- 测验截止提醒
-- 回复通知
-- 系统公告
-
-实现:
-- 前端: 通知中心组件
-- 后端: 通知表 + WebSocket 推送
-```
-
-### 7. 数据分析 (低优先级)
-```
-功能:
-- 学生学习报告
-- 热门讲义排行
-- 活跃时段分析
-- 完成率统计
-
-实现:
-- 后端: 聚合查询
-- 前端: 图表 (ECharts/Chart.js)
-```
-
-### 8. 移动端优化 (中优先级)
-```
-功能:
-- PWA 支持
-- 离线阅读
-- 推送通知
-- 手势操作
-```
-
----
-
-## 架构优化建议
-
-### 1. 数据库迁移 (重要)
-```
-现状: sql.js (SQLite) - 内存数据库，重启数据丢失
-建议: 迁移到 PostgreSQL/MySQL
-
-原因:
-- 数据持久化
-- 并发支持
-- 更好的性能
-- 支持 FTS、JSON 字段
-
-迁移方案:
-- 用 Prisma ORM (已有 prisma/ 目录)
-- 渐进式迁移，先双写再切换
-```
-
-### 2. API 设计规范化
-```
-现状: REST API 但不够规范
-建议:
-- 统一响应格式: { code, data, message }
-- 统一错误处理
-- 添加 API 版本控制 (/api/v1/...)
-- 添加 Swagger/OpenAPI 文档
-```
-
-### 3. 认证授权增强
-```
-现状: JWT + localStorage
-建议:
-- 添加 Refresh Token 机制
-- 角色权限系统 (RBAC)
-- API 速率限制
-- 密码强度策略
-```
-
-### 4. 前端架构优化
-```
-现状: Vue 3 单文件组件
-建议:
-- 添加 Pinia 状态管理 (替代 localStorage 存储用户态)
-- 组件库规范化 (封装通用组件)
-- 路由守卫完善
-- 错误边界处理
-- 性能优化 (懒加载、虚拟滚动)
-```
-
-### 5. 文件存储优化
-```
-现状: 本地文件系统 (lectures/)
-建议:
-- 迁移到对象存储 (腾讯云 COS/阿里云 OSS)
-- CDN 加速
-- 文件压缩/转码
-- 防盗链
-```
-
-### 6. 监控与日志
-```
-建议:
-- 添加错误监控 (Sentry)
-- 性能监控
-- 访问日志
-- 自动化测试
-```
-
-### 7. 部署优化
-```
-现状: 手动部署到腾讯云
-建议:
-- CI/CD 流水线 (GitHub Actions)
-- Docker 容器化
-- 蓝绿部署
-- 自动备份
-```
-
----
-
-## 实施优先级
-
-| 优先级 | 功能 | 原因 |
-|--------|------|------|
-| P0 | 数据库持久化 | 数据安全是底线 |
-| P0 | 搜索功能 | 讲义多了必须有 |
-| P1 | 学习进度 | 核心学习体验 |
-| P1 | 笔记系统 | 学习闭环 |
-| P2 | 测验系统 | 检验学习效果 |
-| P2 | 评论讨论 | 互动性 |
-| P3 | 数据分析 | 运营需要 |
-| P3 | 移动端/PWA | 使用场景扩展 |
-
----
-
-## 技术选型建议
-
-| 组件 | 当前 | 建议 |
-|------|------|------|
-| 数据库 | sql.js | PostgreSQL (用 Prisma) |
-| 缓存 | 无 | Redis (会话、热点数据) |
-| 搜索 | 无 | PostgreSQL FTS / MeiliSearch |
-| 文件存储 | 本地 | 腾讯云 COS |
-| 状态管理 | localStorage | Pinia |
-| 组件库 | 手写 | Element Plus / Ant Design Vue |
-| 图表 | 无 | ECharts |
-| 测试 | 无 | Vitest + Playwright |
-
----
-
-## 下一步行动
-
-1. **立即**: 提交当前未提交的代码到 Git
-2. **本周**: 数据库迁移到 PostgreSQL
-3. **下周**: 实现搜索功能
-4. **后续**: 按优先级逐个实现功能
-
-要我帮你开始实施哪个？
+- **迁 PostgreSQL/MySQL**：单机教育平台，better-sqlite3 + WAL 足够；FTS5 已覆盖搜索需求
+- **引入 Redis**：无高并发会话/缓存压力
+- **微服务化/容器编排**：单体 Express 部署简单可靠

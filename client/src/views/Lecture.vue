@@ -16,6 +16,11 @@
           :disabled="exporting"
           @click="onExportPdf"
         >{{ exporting ? '生成中…' : '导出 PDF' }}</button>
+        <button
+          type="button"
+          class="export-pdf-btn notes-toggle-btn"
+          @click="toggleNotes"
+        >笔记</button>
         <div v-if="currentPath && !nativeLayout" class="read-progress">
           <span>{{ readProgress }}%</span>
           <div><i :style="{ width: `${readProgress}%` }"></i></div>
@@ -167,6 +172,44 @@
         </div>
       </main>
     </div>
+
+    <!-- 章节笔记抽屉 -->
+    <Teleport to="body">
+      <Transition name="notes-drawer">
+        <aside v-if="notesPanelOpen" class="notes-panel" aria-label="我的笔记">
+          <div class="notes-header">
+            <h3>我的笔记</h3>
+            <button class="notes-close" aria-label="关闭笔记" @click="notesPanelOpen = false">✕</button>
+          </div>
+          <div class="notes-body">
+            <div class="note-composer">
+              <textarea
+                v-model="newNote"
+                :placeholder="`记录笔记（${currentChapterMeta()?.title || '当前章节'}）…`"
+                rows="3"
+                maxlength="5000"
+              ></textarea>
+              <button
+                type="button"
+                class="note-save-btn"
+                :disabled="noteSaving || !newNote.trim()"
+                @click="addNote"
+              >{{ noteSaving ? '保存中…' : '添加笔记' }}</button>
+            </div>
+            <div v-if="notesLoading" class="notes-empty">加载中…</div>
+            <div v-else-if="notes.length === 0" class="notes-empty">还没有笔记，写下第一条吧</div>
+            <div v-for="note in notes" :key="note.id" class="note-item">
+              <div class="note-meta">
+                <span class="note-chapter">{{ chapterTitleOf(note.chapter_slug) }}</span>
+                <button type="button" class="note-del-btn" @click="removeNote(note.id)">删除</button>
+              </div>
+              <p class="note-content">{{ note.content }}</p>
+              <small class="note-time">{{ formatNoteTime(note.updated_at) }}</small>
+            </div>
+          </div>
+        </aside>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -176,6 +219,7 @@ import { useRoute } from 'vue-router'
 import api, { showToast } from '../lib/http'
 import { decodeJwtPayload } from '../lib/jwt'
 import { buildChapterSrc } from '../utils/lectureUrl'
+import { formatDateTime } from '../utils/date'
 import { printIframe } from '../utils/exporter.js'
 
 const route = useRoute()
@@ -251,7 +295,88 @@ function handleTocMessage(e) {
   if (e.data?.type === 'reading-progress') {
     readProgress.value = Math.max(0, Math.min(100, Math.round(Number(e.data.progress) || 0)))
     saveRecentLecture()
+    reportProgress(readProgress.value >= 100)
   }
+}
+
+// ===== 学习进度上报（服务端，供班级看板/断点续学）=====
+// 节流 8 秒；读完（100%）立即上报。失败静默：本地 localStorage 已兜底
+let lastReportAt = 0
+function reportProgress(force = false) {
+  if (!lecture.value || !currentChapter.value) return
+  const now = Date.now()
+  if (!force && now - lastReportAt < 8000) return
+  lastReportAt = now
+  const chapter = currentChapterMeta()
+  api.post('/api/progress', {
+    lectureSlug: slug.value,
+    chapterSlug: currentChapter.value,
+    lectureTitle: lecture.value.title || '',
+    chapterTitle: chapter?.title || '',
+    progress: readProgress.value
+  }).catch(() => {})
+}
+
+// ===== 章节笔记 =====
+const notesPanelOpen = ref(false)
+const notes = ref([])
+const notesLoading = ref(false)
+const newNote = ref('')
+const noteSaving = ref(false)
+
+function toggleNotes() {
+  notesPanelOpen.value = !notesPanelOpen.value
+  if (notesPanelOpen.value) loadNotes()
+}
+
+async function loadNotes() {
+  if (!lecture.value) return
+  notesLoading.value = true
+  try {
+    const res = await api.get('/api/notes', { params: { lectureSlug: slug.value } })
+    notes.value = res.data
+  } catch {
+    notes.value = []
+  } finally {
+    notesLoading.value = false
+  }
+}
+
+async function addNote() {
+  const content = newNote.value.trim()
+  if (!content || !currentChapter.value) return
+  noteSaving.value = true
+  try {
+    await api.post('/api/notes', {
+      lectureSlug: slug.value,
+      chapterSlug: currentChapter.value,
+      content,
+      anchor: activeAnchor.value || null
+    })
+    newNote.value = ''
+    await loadNotes()
+  } catch (e) {
+    showToast(e.response?.data?.error || '笔记保存失败')
+  } finally {
+    noteSaving.value = false
+  }
+}
+
+async function removeNote(id) {
+  try {
+    await api.delete(`/api/notes/${id}`)
+    notes.value = notes.value.filter(note => note.id !== id)
+  } catch {
+    showToast('删除失败')
+  }
+}
+
+function chapterTitleOf(chapterSlug) {
+  return chapters.value.find(item => item.slug === chapterSlug)?.title || chapterSlug
+}
+
+function formatNoteTime(value) {
+  return formatDateTime(value)
 }
 
 function sendToViewer(msg) {
@@ -519,6 +644,186 @@ watch(currentChapter, (chapter) => {
 .export-pdf-btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+/* 笔记按钮：export 按钮渲染时紧随其后，隐藏(native 布局)时自己右对齐 */
+.notes-toggle-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.export-pdf-btn + .notes-toggle-btn {
+  margin-left: 0;
+}
+
+/* ===== 章节笔记抽屉 ===== */
+.notes-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(380px, 92vw);
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border-left: 1px solid var(--color-border);
+  box-shadow: -12px 0 40px rgba(0, 0, 0, 0.12);
+}
+
+.notes-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.notes-header h3 {
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.notes-close {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  color: var(--color-ink-secondary);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.notes-close:hover {
+  background: var(--color-border);
+}
+
+.notes-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.note-composer {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.note-composer textarea {
+  width: 100%;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.note-composer textarea:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+.note-save-btn {
+  justify-self: end;
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--color-primary);
+  color: white;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.note-save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.notes-empty {
+  padding: var(--space-8) 0;
+  text-align: center;
+  color: var(--color-ink-tertiary);
+  font-size: var(--text-sm);
+}
+
+.note-item {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.note-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.note-chapter {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--color-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-del-btn {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-ink-tertiary);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.note-del-btn:hover {
+  color: var(--color-error);
+  background: var(--color-error-subtle);
+}
+
+.note-content {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.note-time {
+  color: var(--color-ink-tertiary);
+  font-size: var(--text-xs);
+}
+
+.notes-drawer-enter-active,
+.notes-drawer-leave-active {
+  transition: transform 0.25s var(--ease-out-expo), opacity 0.25s ease;
+}
+
+.notes-drawer-enter-from,
+.notes-drawer-leave-to {
+  transform: translateX(24px);
+  opacity: 0;
 }
 
 .read-progress div {

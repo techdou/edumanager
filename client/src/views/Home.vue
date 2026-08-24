@@ -10,6 +10,37 @@
           </svg>
           <span class="brand-name">EduManager</span>
         </div>
+        <div class="header-search">
+          <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+          <input
+            v-model="searchQuery"
+            class="search-input"
+            type="search"
+            placeholder="搜索讲义内容…"
+            aria-label="搜索讲义"
+            @focus="searchFocus = true"
+            @focusout="onSearchBlur"
+          />
+          <div v-if="searchDropdownVisible" class="search-dropdown" @mousedown.prevent>
+            <div v-if="searchLoading" class="search-empty">搜索中…</div>
+            <div v-else-if="searchResults.length === 0" class="search-empty">没有找到相关内容</div>
+            <div v-for="lecture in searchResults" :key="lecture.id" class="search-result">
+              <a class="search-lecture" @mousedown.prevent="goSearchHit(lecture, null)">
+                <strong>{{ lecture.title }}</strong>
+                <span class="search-cat">{{ lecture.category_name || '未分类' }}</span>
+              </a>
+              <a
+                v-for="hit in lecture.hits"
+                :key="hit.chapter_slug || 'title'"
+                class="search-hit"
+                @mousedown.prevent="goSearchHit(lecture, hit)"
+              >
+                <span class="search-hit-title">{{ hit.chapter_title }}</span>
+                <span class="search-hit-snippet" v-html="renderSnippet(hit.snippet)"></span>
+              </a>
+            </div>
+          </div>
+        </div>
         <nav class="nav">
           <template v-if="isLoggedIn">
             <router-link to="/learn" class="nav-link">学习中心</router-link>
@@ -323,7 +354,7 @@
 </template>
 
 <script setup>
-import { defineAsyncComponent, reactive, ref, computed, onMounted, onUnmounted } from 'vue'
+import { defineAsyncComponent, reactive, ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../lib/http'
 import MarkdownIt from 'markdown-it'
@@ -473,6 +504,61 @@ const filteredLectures = computed(() => {
 
 const totalChapters = computed(() => lectures.value.reduce((s, l) => s + (l.chapters?.length || 0), 0))
 
+// ===== 全文搜索（FTS5，后端 /api/search）=====
+const searchQuery = ref('')
+const searchResults = ref([])
+const searchFocus = ref(false)
+const searchLoading = ref(false)
+let searchTimer = null
+let searchSeq = 0
+
+watch(searchQuery, (q) => {
+  clearTimeout(searchTimer)
+  const seq = ++searchSeq
+  if (!q || q.trim().length < 2) {
+    searchResults.value = []
+    searchLoading.value = false
+    return
+  }
+  searchLoading.value = true
+  searchTimer = setTimeout(async () => {
+    try {
+      const res = await api.get('/api/search', { params: { q: q.trim() } })
+      if (seq === searchSeq) searchResults.value = res.data.results || []
+    } catch {
+      if (seq === searchSeq) searchResults.value = []
+    } finally {
+      if (seq === searchSeq) searchLoading.value = false
+    }
+  }, 300)
+})
+
+const searchDropdownVisible = computed(() =>
+  searchFocus.value && searchQuery.value.trim().length >= 2
+)
+
+// blur 后延迟关闭，让浮层内的 mousedown 点击先完成跳转
+function onSearchBlur() {
+  setTimeout(() => { searchFocus.value = false }, 150)
+}
+
+// snippet 先整体转义再还原高亮标记，杜绝内容里的 HTML 注入
+function renderSnippet(text) {
+  const escaped = String(text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+  return escaped.replace(/「([^」]*)」/g, '<mark>$1</mark>')
+}
+
+function goSearchHit(lecture, hit) {
+  searchFocus.value = false
+  router.push(hit?.chapter_slug && hit.chapter_slug !== lecture.slug
+    ? `/lecture/${lecture.slug}/${hit.chapter_slug}`
+    : `/lecture/${lecture.slug}`)
+}
+
 async function loadHomeData() {
   loading.value = true
   loadError.value = false
@@ -509,6 +595,141 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* ====== Header Search ====== */
+.header-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  min-width: 220px;
+  flex: 1;
+  max-width: 320px;
+}
+
+.search-icon {
+  color: var(--color-ink-tertiary);
+  flex-shrink: 0;
+}
+
+.search-input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--color-ink);
+  font: inherit;
+  font-size: var(--text-sm);
+  outline: none;
+}
+
+.search-input::placeholder {
+  color: var(--color-ink-tertiary);
+}
+
+.search-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  min-width: 340px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-lg);
+  z-index: 200;
+}
+
+.search-empty {
+  padding: var(--space-4);
+  text-align: center;
+  color: var(--color-ink-tertiary);
+  font-size: var(--text-sm);
+}
+
+.search-result + .search-result {
+  border-top: 1px solid var(--color-border);
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+}
+
+.search-lecture {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.search-lecture:hover {
+  background: var(--color-bg);
+}
+
+.search-lecture strong {
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-cat {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--color-brand-subtle);
+  color: var(--color-brand);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.search-hit {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-5);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.search-hit:hover {
+  background: var(--color-bg);
+}
+
+.search-hit-title {
+  color: var(--color-primary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-hit-snippet {
+  color: var(--color-ink-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.search-hit-snippet :deep(mark),
+.search-hit-snippet mark {
+  background: var(--color-primary-subtle);
+  color: var(--color-primary);
+  font-weight: 700;
+  padding: 0 1px;
+  border-radius: 2px;
+}
+
 /* ====== Login Tip Toast ====== */
 .empty-state-desc {
   color: var(--color-ink-secondary);

@@ -22,3 +22,12 @@ if (typeof window !== 'undefined') {
 }
 
 app.use(router).mount('#app')
+
+// PWA：仅生产构建注册 Service Worker（讲义离线阅读）
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      // 注册失败不影响正常使用
+    })
+  })
+}
