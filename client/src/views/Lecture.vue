@@ -9,6 +9,13 @@
           <span>返回列表</span>
         </router-link>
         <h1 class="lecture-title">{{ lecture?.title || '讲义浏览' }}</h1>
+        <button
+          v-if="currentSrc && !nativeLayout"
+          type="button"
+          class="export-pdf-btn"
+          :disabled="exporting"
+          @click="onExportPdf"
+        >{{ exporting ? '生成中…' : '导出 PDF' }}</button>
         <div v-if="currentPath && !nativeLayout" class="read-progress">
           <span>{{ readProgress }}%</span>
           <div><i :style="{ width: `${readProgress}%` }"></i></div>
@@ -164,6 +171,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import api, { showToast } from '../lib/http'
+import { printIframe } from '../utils/exporter.js'
 
 const route = useRoute()
 const slug = computed(() => route.params.slug)
@@ -173,6 +181,19 @@ const isMobile = ref(window.innerWidth <= 768)
 const loading = ref(true)
 const viewerFrame = ref(null)
 const iframeError = ref(false)
+const exporting = ref(false)
+
+async function onExportPdf() {
+  if (exporting.value || !viewerFrame.value) return
+  exporting.value = true
+  try {
+    await printIframe(viewerFrame.value)
+  } catch (e) {
+    showToast(e.message || '导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
 
 const lecture = ref(null)
 const chapters = ref([])
@@ -502,7 +523,6 @@ watch(currentChapter, () => loadLecture())
 }
 
 .read-progress {
-  margin-left: auto;
   min-width: 140px;
   display: grid;
   gap: 5px;
@@ -510,6 +530,32 @@ watch(currentChapter, () => loadLecture())
   font-size: var(--text-xs);
   font-weight: 700;
   text-align: right;
+}
+
+/* 导出 PDF 按钮：放在 read-progress 左侧，作为右对齐簇的第一项 */
+.export-pdf-btn {
+  margin-left: auto;
+  margin-right: 12px;
+  padding: 7px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-ink-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.export-pdf-btn:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.export-pdf-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .read-progress div {

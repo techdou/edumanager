@@ -173,7 +173,7 @@
                 :alt="`${doc.title} 封面`"
                 loading="lazy"
               />
-              <MarkdownPreview v-else-if="doc.file_type === 'markdown'" :doc-id="doc.id" />
+              <MarkdownPreview v-else-if="doc.file_type === 'markdown'" :doc-id="doc.id" :title="doc.title" />
               <iframe
                 v-else-if="doc.file_type === 'pdf'"
                 :src="doc.file_url || doc.url"
@@ -319,8 +319,10 @@
 import { defineAsyncComponent, reactive, ref, computed, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 import MarkdownIt from 'markdown-it'
+import katexPlugin from '@vscode/markdown-it-katex'
+import 'katex/dist/katex.min.css'
 
-const md = new MarkdownIt({ html: false })
+const md = new MarkdownIt({ html: false }).use(katexPlugin)
 
 function renderMd(text) {
   return text ? md.render(text) : ''
