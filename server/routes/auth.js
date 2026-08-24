@@ -21,14 +21,14 @@ function logUserActivity(user, activityType, role, details = null) {
 // 管理员登录
 router.post('/admin/login', async (req, res) => {
   const { username, password } = req.body;
-  
+
   const admin = db.get('SELECT * FROM admins WHERE username = ?', [username]);
-  
+
   if (!admin) {
     return res.status(401).json({ error: '用户名或密码错误' });
   }
-  
-  const valid = bcrypt.compareSync(password, admin.password_hash);
+
+  const valid = await bcrypt.compare(password, admin.password_hash);
   if (!valid) {
     return res.status(401).json({ error: '用户名或密码错误' });
   }
@@ -59,7 +59,7 @@ router.post('/admin/login', async (req, res) => {
 });
 
 // 学生注册（如果无管理员，自动成为管理员）
-router.post('/student/register', (req, res) => {
+router.post('/student/register', async (req, res) => {
   const { username, password, email, real_name } = req.body;
 
   if (!username || !password) {
@@ -75,7 +75,7 @@ router.post('/student/register', (req, res) => {
     return res.status(400).json({ error: '用户名已存在' });
   }
 
-  const passwordHash = bcrypt.hashSync(password, 10);
+  const passwordHash = await bcrypt.hash(password, 10);
   // 事务：students 写入与（可能的）admins 写入必须原子
   const result = db.transaction(() => {
     const r = db.run('INSERT INTO students (username, password_hash, email, real_name) VALUES (?, ?, ?, ?)', [username, passwordHash, email || null, real_name]);
@@ -103,11 +103,11 @@ router.post('/student/register', (req, res) => {
 });
 
 // 学生登录
-router.post('/student/login', (req, res) => {
+router.post('/student/login', async (req, res) => {
   const { username, password } = req.body;
-  
+
   const student = db.get('SELECT * FROM students WHERE username = ?', [username]);
-  
+
   if (!student) {
     return res.status(401).json({ error: '用户名或密码错误' });
   }
@@ -115,8 +115,8 @@ router.post('/student/login', (req, res) => {
   if (student.status === 'disabled') {
     return res.status(403).json({ error: '账号已被禁用，请联系管理员' });
   }
-  
-  const valid = bcrypt.compareSync(password, student.password_hash);
+
+  const valid = await bcrypt.compare(password, student.password_hash);
   if (!valid) {
     return res.status(401).json({ error: '用户名或密码错误' });
   }
@@ -133,19 +133,19 @@ router.post('/student/login', (req, res) => {
 });
 
 // 管理员注册（仅第一个）
-router.post('/admin/register', (req, res) => {
+router.post('/admin/register', async (req, res) => {
   const { username, password } = req.body;
-  
+
   if (!username || !password) {
     return res.status(400).json({ error: '用户名和密码必填' });
   }
-  
+
   const count = db.query('SELECT id FROM admins');
   if (count.length > 0) {
     return res.status(403).json({ error: '管理员账号已存在，无法重复注册' });
   }
-  
-  const passwordHash = bcrypt.hashSync(password, 10);
+
+  const passwordHash = await bcrypt.hash(password, 10);
   const existingStudent = db.get('SELECT id FROM students WHERE username = ?', [username]);
   if (existingStudent) {
     return res.status(400).json({ error: '用户名已存在' });

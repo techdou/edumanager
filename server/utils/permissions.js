@@ -26,6 +26,15 @@ function canAccessLecture(studentId, lecture) {
   return accessibleCategories.includes(lecture.category_id);
 }
 
+// 知识文档访问判断：与讲义同模型（公开 OR 学生所在班级有该分类权限）。
+// 未挂分类的文档只有公开态和管理员可见——无分类即无法授权，这是预期行为
+function canAccessKnowledge(studentId, doc) {
+  if (doc.is_public === 1) return true;
+  if (!studentId || !doc.category_id) return false;
+  const accessibleCategories = getAccessibleCategories(studentId);
+  return accessibleCategories.includes(doc.category_id);
+}
+
 function filterAccessibleLectures(studentId, lectures) {
   if (!studentId) return lectures.filter(l => l.is_public === 1);
   const accessibleCategories = getAccessibleCategories(studentId);
@@ -34,4 +43,4 @@ function filterAccessibleLectures(studentId, lectures) {
   );
 }
 
-module.exports = { getStudentGroups, getAccessibleCategories, canAccessLecture, filterAccessibleLectures };
+module.exports = { getStudentGroups, getAccessibleCategories, canAccessLecture, canAccessKnowledge, filterAccessibleLectures };

@@ -5,17 +5,14 @@
 const path = require('path');
 const fs = require('fs');
 
-// JWT_SECRET 强校验：缺失或过短直接拒绝启动，杜绝默认密钥伪造 token
+// JWT_SECRET 强校验：缺失或过短直接拒绝启动，杜绝默认密钥伪造 token。
+// 不提供任何兜底值——源码里的公开兜底密钥等于允许伪造任意管理员 token
 const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
-  // 首次部署允许自动生成并写入 .env，但生产必须显式设置
-  console.error('[CONFIG] 致命错误：未设置 JWT_SECRET 环境变量。');
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  console.error('[CONFIG] 致命错误：未设置 JWT_SECRET 环境变量（或长度不足 32）。');
   console.error('[CONFIG] 请在项目根目录 .env 文件中设置 JWT_SECRET=<至少32位随机字符串>');
   console.error('[CONFIG] 示例生成：node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"');
-  // 开发环境兜底：NODE_ENV !== production 时给一个带警告的临时值，避免本地起不来
-  if (process.env.NODE_ENV === 'production') {
-    process.exit(1);
-  }
+  process.exit(1);
 }
 
 const port = Number(process.env.PORT) || 3142;
@@ -37,7 +34,7 @@ const dbPath = path.join(dataDir, 'edumanager.db');
 fs.mkdirSync(dataDir, { recursive: true });
 fs.mkdirSync(lecturesDir, { recursive: true });
 
-// 依赖探测：unar/unzip 是上传讲义的必需外部工具
+// 依赖探测：优先用外部解压器（编码兼容更好），缺失时降级 adm-zip 纯 JS 解压
 function detectUnarchiver() {
   const { execFileSync } = require('child_process');
   for (const cmd of ['unar', 'unzip']) {
@@ -50,12 +47,12 @@ function detectUnarchiver() {
 }
 const unarchiver = detectUnarchiver();
 if (!unarchiver) {
-  console.warn('[CONFIG] 警告：未检测到 unar 或 unzip，上传 ZIP 讲义功能将不可用。');
+  console.warn('[CONFIG] 警告：未检测到 unar 或 unzip，ZIP 解压将降级为 adm-zip（纯 JS，GB编码文件名可能乱码）。');
 }
 
 module.exports = {
   port,
-  jwtSecret: JWT_SECRET || '__dev_only_insecure_secret_do_not_use_in_prod__',
+  jwtSecret: JWT_SECRET,
   corsOrigin,
   rootDir,
   dataDir,

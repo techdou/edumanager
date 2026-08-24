@@ -44,7 +44,9 @@ app.get('/health', (req, res) => {
   res.json({ ok: true, uptime: process.uptime(), ts: Date.now() });
 });
 
-const lecturesRoot = path.resolve(__dirname, '../lectures');
+// 静态讲义服务必须与上传逻辑用同一个根目录（config.lecturesDir），
+// 否则配置 LECTURES_DIR 后上传成功但访问全部 404
+const lecturesRoot = config.lecturesDir;
 app.get('/lectures/:lectureSlug/*', optionalStudentAuth, (req, res) => {
   const lecture = db.get('SELECT id, slug, category_id, is_public FROM lectures WHERE slug = ?', [req.params.lectureSlug]);
   if (!lecture) {
@@ -56,6 +58,10 @@ app.get('/lectures/:lectureSlug/*', optionalStudentAuth, (req, res) => {
 
   const requested = path.resolve(lecturesRoot, req.params.lectureSlug, req.params[0] || '');
   if (!requested.startsWith(`${lecturesRoot}${path.sep}`) || !fs.existsSync(requested)) {
+    return res.status(404).send('File not found');
+  }
+  // 命中目录时 sendFile 会抛 ERR_FS_EISDIR 落到 500，这里提前转成 404
+  if (!fs.statSync(requested).isFile()) {
     return res.status(404).send('File not found');
   }
   res.sendFile(requested);
@@ -118,9 +124,9 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 // 启动数据库并监听（db.init 为同步，包裹 try/catch）
 try {
   db.init();
-  // 启动时自动备份一次（仅生产，避免开发时频繁备份）
+  // 启动时自动备份一次（仅生产，避免开发时频繁备份）。backup 是异步的，失败仅记日志不阻塞启动
   if (config.isProd) {
-    db.backup('.startup') ;
+    db.backup('.startup').catch(() => {});
   }
   server = app.listen(PORT, () => logger.info({ port: PORT }, 'server_started'));
   server.on('error', (err) => {

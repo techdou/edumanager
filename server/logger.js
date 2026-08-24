@@ -13,7 +13,13 @@ function write(level, obj, msg) {
   } else if (obj !== undefined) {
     record.data = obj;
   }
-  const line = JSON.stringify(record);
+  // 循环引用等场景 stringify 会抛错，兜底降级避免炸掉调用方（含全局错误处理器）
+  let line;
+  try {
+    line = JSON.stringify(record);
+  } catch {
+    line = JSON.stringify({ time: record.time, level, msg: String(msg), note: 'stringify_failed' });
+  }
   if (level === 'error' || level === 'warn') {
     process.stderr.write(line + '\n');
   } else {

@@ -22,8 +22,8 @@ console.log(`事务后分类数: ${after}`);
 console.log(`回滚生效: ${rolledBack && before === after ? '✓' : '✗'}`);
 console.log(`无幽灵记录: ${!ghost ? '✓' : '✗ (存在脏数据)'}`);
 
-// 清理冒烟测试注册的账号
-db.run("DELETE FROM students WHERE username LIKE 'smoke_%'");
+// 清理冒烟测试注册的账号（精确匹配 smoke_<时间戳> 格式，GLOB 下 _ 不再是通配符，避免误删真实用户）
+db.run("DELETE FROM students WHERE username GLOB 'smoke_[0-9]*'");
 console.log('已清理冒烟测试账号');
 
 db.close();

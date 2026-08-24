@@ -13,8 +13,12 @@ function studentAuth(req, res, next) {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const user = db.get('SELECT id, username, status FROM students WHERE id = ? AND username = ?', [decoded.id, decoded.username]);
+    const user = db.get('SELECT id, username, status, pwd_updated_at FROM students WHERE id = ? AND username = ?', [decoded.id, decoded.username]);
     if (!user || user.status === 'disabled') {
+      return res.status(401).json({ error: '登录已过期' });
+    }
+    // 密码修改后旧 token 立即失效（iat 早于 pwd_updated_at 即拒绝）
+    if (user.pwd_updated_at && decoded.iat && decoded.iat < user.pwd_updated_at) {
       return res.status(401).json({ error: '登录已过期' });
     }
     req.student = { id: decoded.id, username: decoded.username, role: decoded.role };
@@ -32,12 +36,13 @@ function optionalStudentAuth(req, res, next) {
   }
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    const user = db.get('SELECT id, username, status FROM students WHERE id = ? AND username = ?', [decoded.id, decoded.username]);
-    if (!user || user.status === 'disabled') {
-      req.student = null;
-    } else {
-      req.student = { id: decoded.id, username: decoded.username, role: decoded.role };
-    }
+    const user = db.get('SELECT id, username, status, pwd_updated_at FROM students WHERE id = ? AND username = ?', [decoded.id, decoded.username]);
+    const valid = user
+      && user.status !== 'disabled'
+      && !(user.pwd_updated_at && decoded.iat && decoded.iat < user.pwd_updated_at);
+    req.student = valid
+      ? { id: decoded.id, username: decoded.username, role: decoded.role }
+      : null;
   } catch {
     req.student = null;
   }

@@ -75,12 +75,13 @@ function safeJson(value) {
   }
 }
 
-// 用户列表：分页、搜索、角色和状态筛选
-router.get('/users', (req, res) => {
-  const { page, pageSize, offset } = parsePage(req.query);
+// 用户列表：分页、搜索、角色和状态筛选。
+// all=1 时不分页（上限 5000），供"班级添加学生"下拉拉全量，避免超过一页的学生永远选不到
+router.get('/users', async (req, res) => {
   const search = String(req.query.search || '').trim();
   const role = req.query.role;
   const status = req.query.status;
+  const fetchAll = req.query.all === '1';
 
   const conditions = [];
   const params = [];
@@ -102,6 +103,9 @@ router.get('/users', (req, res) => {
   }
 
   const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const { page, pageSize, offset } = parsePage(req.query);
+  const limit = fetchAll ? Math.min(Math.max(parseInt(req.query.limit, 10) || 5000, 1), 5000) : pageSize;
+
   const countRow = db.get(`
     SELECT COUNT(*) AS total
     FROM students s
@@ -117,17 +121,29 @@ router.get('/users', (req, res) => {
     ${whereClause}
     ORDER BY s.created_at DESC, s.id DESC
     LIMIT ? OFFSET ?
-  `, [...params, pageSize, offset]);
+  `, [...params, limit, fetchAll ? 0 : offset]);
 
   const total = Number(countRow?.total || 0);
 
-  items.forEach(item => {
-    item.groups = db.query(`
-      SELECT g.id, g.name FROM groups g
-      INNER JOIN group_students gs ON gs.group_id = g.id
-      WHERE gs.student_id = ?
-    `, [item.id]);
-  });
+  // 一次查出本页全部学生的班级关系再内存分组，避免逐行查询（N+1）
+  if (items.length > 0) {
+    const ids = items.map(item => item.id);
+    const placeholders = ids.map(() => '?').join(',');
+    const groupRows = db.query(`
+      SELECT gs.student_id, g.id, g.name
+      FROM group_students gs
+      INNER JOIN groups g ON g.id = gs.group_id
+      WHERE gs.student_id IN (${placeholders})
+    `, ids);
+    const groupsByStudent = new Map();
+    groupRows.forEach(row => {
+      if (!groupsByStudent.has(row.student_id)) groupsByStudent.set(row.student_id, []);
+      groupsByStudent.get(row.student_id).push({ id: row.id, name: row.name });
+    });
+    items.forEach(item => {
+      item.groups = groupsByStudent.get(item.id) || [];
+    });
+  }
 
   res.json({
     items,
@@ -139,7 +155,7 @@ router.get('/users', (req, res) => {
 });
 
 // 创建用户
-router.post('/users', (req, res) => {
+router.post('/users', async (req, res) => {
   const username = String(req.body.username || '').trim();
   const password = String(req.body.password || '');
   const email = String(req.body.email || '').trim() || null;
@@ -156,7 +172,7 @@ router.post('/users', (req, res) => {
     return res.status(400).json({ error: '用户名已存在' });
   }
 
-  const passwordHash = bcrypt.hashSync(password, 10);
+  const passwordHash = await bcrypt.hash(password, 10);
   // 事务：students 与 admins 双写必须原子
   const result = db.transaction(() => {
     const r = db.run(`
@@ -194,7 +210,7 @@ router.get('/users/:id', (req, res) => {
 });
 
 // 编辑用户
-router.put('/users/:id', (req, res) => {
+router.put('/users/:id', async (req, res) => {
   const user = getUserById(req.params.id);
   if (!user) {
     return res.status(404).json({ error: '用户不存在' });
@@ -223,14 +239,16 @@ router.put('/users/:id', (req, res) => {
     return res.status(400).json({ error: '至少需要保留一个启用状态的管理员' });
   }
 
-  const passwordHash = password ? bcrypt.hashSync(password, 10) : null;
+  const passwordHash = password ? await bcrypt.hash(password, 10) : null;
   const studentHash = passwordHash || db.get('SELECT password_hash FROM students WHERE id = ?', [user.id]).password_hash;
 
-  // 事务：students 表与 admins 表的角色/密码/用户名同步必须原子，避免半边更新
+  // 事务：students 表与 admins 表的角色/密码/用户名同步必须原子，避免半边更新。
+  // 改密码同时更新 pwd_updated_at（unixepoch 秒），让该用户已签发的全部旧 token 立即失效
   db.transaction(() => {
     db.run(`
       UPDATE students
-      SET username = ?, email = ?, status = ?${passwordHash ? ', password_hash = ?' : ''}
+      SET username = ?, email = ?, status = ?
+        ${passwordHash ? ', password_hash = ?, pwd_updated_at = CAST(strftime(\'%s\', \'now\') AS INTEGER)' : ''}
       WHERE id = ?
     `, passwordHash
       ? [username, email, status, passwordHash, user.id]

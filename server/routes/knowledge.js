@@ -8,6 +8,9 @@ const db = require('../db');
 const config = require('../config');
 const logger = require('../logger');
 const adminAuth = require('../middleware/adminAuth');
+const { resolveAdminFromToken } = require('../middleware/adminAuth');
+const { optionalStudentAuth } = require('../middleware/studentAuth');
+const { canAccessKnowledge, getAccessibleCategories } = require('../utils/permissions');
 
 const router = express.Router();
 const storageRoot = config.knowledgeDir;
@@ -32,7 +35,12 @@ function normalizeDoc(body) {
     || body.isFeatured === 'false'
     ? 0
     : 1;
-  return { title, url, summary, categoryId, source, isFeatured };
+  const isPublic = body.isPublic === true
+    || body.isPublic === 1
+    || body.isPublic === '1'
+    ? 1
+    : 0;
+  return { title, url, summary, categoryId, source, isFeatured, isPublic };
 }
 
 function isValidUrl(value) {
@@ -47,12 +55,20 @@ function isValidUrl(value) {
 function getDoc(id) {
   return db.get(`
     SELECT d.id, d.title, d.url, d.summary, d.category_id, d.source,
-           d.file_path, d.file_name, d.file_type, d.cover_path, d.is_featured,
+           d.file_path, d.file_name, d.file_type, d.cover_path, d.is_featured, d.is_public,
            d.created_at, d.updated_at, c.name AS category_name
     FROM knowledge_docs d
     LEFT JOIN categories c ON c.id = d.category_id
     WHERE d.id = ?
   `, [id]);
+}
+
+// 单个文档的访问判断：管理员放行，否则按 公开 OR 班级分类权限
+function resolveAdmin(req, doc) {
+  if (!doc) return false;
+  const admin = resolveAdminFromToken(req.headers.authorization?.replace('Bearer ', ''));
+  if (admin) return true;
+  return canAccessKnowledge(req.student?.id, doc);
 }
 
 function getPublicDoc(row) {
@@ -129,18 +145,29 @@ function safeCoverPath(relativePath) {
   return target;
 }
 
-router.get('/', (req, res) => {
+// 知识文档列表：管理员看全部；未登录只看 is_public=1；学生看 公开 + 所在班级可访问分类
+router.get('/', optionalStudentAuth, (req, res) => {
   const featuredOnly = req.query.featured === '1';
   const docs = db.query(`
     SELECT d.id, d.title, d.url, d.summary, d.category_id, d.source,
-           d.file_path, d.file_name, d.file_type, d.cover_path, d.is_featured,
+           d.file_path, d.file_name, d.file_type, d.cover_path, d.is_featured, d.is_public,
            d.created_at, d.updated_at, c.name AS category_name
     FROM knowledge_docs d
     LEFT JOIN categories c ON c.id = d.category_id
     ${featuredOnly ? 'WHERE d.is_featured = 1' : ''}
     ORDER BY d.is_featured DESC, d.updated_at DESC, d.id DESC
   `);
-  res.json(docs.map(getPublicDoc));
+
+  const admin = resolveAdminFromToken(req.headers.authorization?.replace('Bearer ', ''));
+  if (admin) {
+    return res.json(docs.map(getPublicDoc));
+  }
+
+  const accessibleCategories = req.student ? getAccessibleCategories(req.student.id) : [];
+  const visible = docs.filter(doc =>
+    doc.is_public === 1 || accessibleCategories.includes(doc.category_id)
+  );
+  res.json(visible.map(getPublicDoc));
 });
 
 router.post('/', adminAuth, (req, res, next) => {
@@ -173,9 +200,9 @@ router.post('/', adminAuth, (req, res, next) => {
 
   const coverPath = saveCover(cover);
   const result = db.run(`
-    INSERT INTO knowledge_docs (title, url, summary, category_id, source, cover_path, is_featured)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `, [doc.title, doc.url, doc.summary, doc.categoryId, doc.source, coverPath, doc.isFeatured]);
+    INSERT INTO knowledge_docs (title, url, summary, category_id, source, cover_path, is_featured, is_public)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `, [doc.title, doc.url, doc.summary, doc.categoryId, doc.source, coverPath, doc.isFeatured, doc.isPublic]);
   res.status(201).json(getPublicDoc(getDoc(result.lastInsertRowid)));
 });
 
@@ -233,9 +260,9 @@ router.post('/upload', adminAuth, (req, res, next) => {
   // 事务：INSERT 与 UPDATE url 必须原子
   const result = db.transaction(() => {
     const r = db.run(`
-      INSERT INTO knowledge_docs (title, url, summary, category_id, source, file_path, file_name, file_type, cover_path, is_featured)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [doc.title, `/api/knowledge/${0}/file`, doc.summary, doc.categoryId, fileType, storedName, file.originalname, fileType, coverPath, doc.isFeatured]);
+      INSERT INTO knowledge_docs (title, url, summary, category_id, source, file_path, file_name, file_type, cover_path, is_featured, is_public)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [doc.title, `/api/knowledge/${0}/file`, doc.summary, doc.categoryId, fileType, storedName, file.originalname, fileType, coverPath, doc.isFeatured, doc.isPublic]);
     db.run('UPDATE knowledge_docs SET url = ? WHERE id = ?', [`/api/knowledge/${r.lastInsertRowid}/file`, r.lastInsertRowid]);
     return r;
   });
@@ -284,7 +311,7 @@ router.put('/:id', adminAuth, (req, res, next) => {
   db.run(`
     UPDATE knowledge_docs
     SET title = ?, url = ?, summary = ?, category_id = ?, source = ?,
-        cover_path = COALESCE(?, cover_path), is_featured = ?,
+        cover_path = COALESCE(?, cover_path), is_featured = ?, is_public = ?,
         updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `, [
@@ -295,15 +322,19 @@ router.put('/:id', adminAuth, (req, res, next) => {
     existing.file_type ? existing.source : doc.source,
     coverPath,
     doc.isFeatured,
+    existing.file_type ? doc.isPublic : existing.is_public,
     req.params.id
   ]);
   res.json(getPublicDoc(getDoc(req.params.id)));
 });
 
-router.get('/:id/file', (req, res) => {
+router.get('/:id/file', optionalStudentAuth, (req, res) => {
   const doc = getDoc(req.params.id);
   if (!doc || !doc.file_path) {
     return res.status(404).send('File not found');
+  }
+  if (!resolveAdmin(req, doc)) {
+    return res.status(403).send('Forbidden');
   }
 
   const filePath = safeFilePath(doc.file_path);
@@ -321,10 +352,13 @@ router.get('/:id/file', (req, res) => {
   return fs.createReadStream(filePath).pipe(res);
 });
 
-router.get('/:id/markdown', (req, res) => {
+router.get('/:id/markdown', optionalStudentAuth, (req, res) => {
   const doc = getDoc(req.params.id);
   if (!doc || doc.file_type !== 'markdown' || !doc.file_path) {
     return res.status(404).json({ error: 'Markdown 文档不存在' });
+  }
+  if (!resolveAdmin(req, doc)) {
+    return res.status(403).json({ error: '无权限访问该文档' });
   }
 
   const filePath = safeFilePath(doc.file_path);
@@ -336,10 +370,14 @@ router.get('/:id/markdown', (req, res) => {
   res.json({ content: decoded.content, encoding: decoded.encoding });
 });
 
-router.get('/:id/cover', (req, res) => {
+router.get('/:id/cover', optionalStudentAuth, (req, res) => {
   const doc = getDoc(req.params.id);
   if (!doc || !doc.cover_path) {
     return res.status(404).send('Cover not found');
+  }
+  // 封面与文档本体同权限：非公开文档的封面也不能被未授权用户枚举
+  if (!resolveAdmin(req, doc)) {
+    return res.status(403).send('Forbidden');
   }
 
   const coverPath = safeCoverPath(doc.cover_path);

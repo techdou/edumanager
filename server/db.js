@@ -31,6 +31,7 @@ const SCHEMA_STATEMENTS = [
     status TEXT DEFAULT 'active' CHECK(status IN ('active', 'disabled')),
     last_login DATETIME,
     real_name TEXT,
+    pwd_updated_at INTEGER NOT NULL DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`,
   `CREATE TABLE IF NOT EXISTS categories (
@@ -127,6 +128,12 @@ function initDb() {
       db.exec(sql);
     }
 
+    // 迁移：老库补 pwd_updated_at 列（改密码后旧 token 失效用，unixepoch 秒）
+    const studentCols = db.prepare('PRAGMA table_info(students)').all().map(col => col.name);
+    if (!studentCols.includes('pwd_updated_at')) {
+      db.exec('ALTER TABLE students ADD COLUMN pwd_updated_at INTEGER NOT NULL DEFAULT 0');
+    }
+
     // 旧库迁移兼容：如果 admins 表里有数据但 students 表里没有对应记录，
     // 则插入（保持与旧 ensureSchema 一致的自愈逻辑）
     ensureAdminStudentSync();
@@ -204,12 +211,14 @@ function close() {
   }
 }
 
-// 在线备份（启动时调用一次，及手动触发）
-function backup(suffix = '') {
+// 在线备份（启动时调用一次，及手动触发）。
+// better-sqlite3 的 db.backup() 是异步 API（返回 Promise）：
+// 同步 try/catch 捕不到失败，必须 async/await，否则失败被误报为成功
+async function backup(suffix = '') {
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   const backupPath = path.join(config.dataDir, `edumanager.db.backup${suffix}.${ts}`);
   try {
-    db.backup(backupPath);
+    await db.backup(backupPath);
     logger.info({ backupPath }, 'db_backup_done');
     return backupPath;
   } catch (e) {

@@ -12,6 +12,7 @@ const config = require('../config');
 
 // 管理员权限中间件（用于需要管理员的操作）
 const adminAuth = require('../middleware/adminAuth');
+const { resolveAdminFromToken } = require('../middleware/adminAuth');
 const { studentAuth, optionalStudentAuth } = require('../middleware/studentAuth');
 
 const JWT_SECRET = config.jwtSecret;
@@ -19,9 +20,9 @@ const { filterAccessibleLectures, canAccessLecture } = require('../utils/permiss
 const { extractTOC } = require('../utils/tocExtractor');
 const { atomicWriteDir } = require('../utils/fs');
 
-// ZIP 上传配置
+// ZIP 上传配置（临时目录统一走 config.uploadsDir，与 mkdirSync 的目录保持一致）
 const upload = multer({
-  dest: path.join(__dirname, '../uploads/'),
+  dest: config.uploadsDir,
   limits: { fileSize: 200 * 1024 * 1024 } // 200MB
 });
 
@@ -147,6 +148,25 @@ function chooseEntry(files) {
 
 // 解压/拷贝讲义内容到临时目录（供 atomicWriteDir 调用）。
 // 成功返回 populated 的目录，失败抛错（由 atomicWriteDir 负责清理 tmp）
+// adm-zip 降级解压（无外部 unar/unzip 时使用，如 Windows 开发环境）：
+// 逐条目校验规范化路径必须落在 destDir 内，显式防 ZIP slip 穿越写
+function extractZipSafely(zipPath, destDir) {
+  const zip = new AdmZip(zipPath);
+  for (const entry of zip.getEntries()) {
+    if (entry.isDirectory || entry.entryName.startsWith('__MACOSX')) continue;
+    const entryName = String(entry.entryName).replace(/\\/g, '/');
+    const normalized = path.posix.normalize(entryName).replace(/^\/+/, '');
+    if (!normalized || normalized.split('/').includes('..')) {
+      throw new Error(`ZIP 包含不安全路径: ${entryName}`);
+    }
+    const target = path.resolve(destDir, normalized);
+    if (!target.startsWith(`${destDir}${path.sep}`)) {
+      throw new Error(`ZIP 包含不安全路径: ${entryName}`);
+    }
+    zip.extractEntryTo(entry, path.dirname(target), false, true);
+  }
+}
+
 function extractLectureContent(uploadFile, destDir) {
   const isZip = uploadFile.originalname.toLowerCase().endsWith('.zip');
   const isSingleHtml = isHtmlFile(uploadFile.originalname);
@@ -154,15 +174,22 @@ function extractLectureContent(uploadFile, destDir) {
     throw new Error('仅支持 ZIP 或 HTML 文件');
   }
   if (isSingleHtml) {
-    fs.renameSync(uploadFile.path, path.join(destDir, uploadFile.originalname));
+    // originalname 是客户端 multipart 里的任意字符串，直接 path.join 会路径穿越
+    // （构造 "..\..\server\index.js" 可覆盖任意文件）。必须 basename + 文件名白名单
+    const safeName = path.basename(uploadFile.originalname);
+    if (!/^[a-zA-Z0-9\u4e00-\u9fa5][a-zA-Z0-9\u4e00-\u9fa5 ._\-()（）]*\.(html?|xhtml)$/i.test(safeName)) {
+      throw new Error('非法的 HTML 文件名（含路径分隔符或特殊字符）');
+    }
+    fs.renameSync(uploadFile.path, path.join(destDir, safeName));
     return;
   }
-  // 优先用 config 探测到的解压器，避免硬编码 unar/unzip
-  const cmd = config.unarchiver || 'unzip';
-  if (cmd === 'unar') {
+  // 优先用外部解压器（编码兼容更好），缺失时降级 adm-zip 纯 JS 解压
+  if (config.unarchiver === 'unar') {
     execFileSync('unar', ['-o', destDir, uploadFile.path], { encoding: 'utf-8' });
-  } else {
+  } else if (config.unarchiver === 'unzip') {
     execFileSync('unzip', ['-o', uploadFile.path, '-d', destDir], { encoding: 'utf-8' });
+  } else {
+    extractZipSafely(uploadFile.path, destDir);
   }
 }
 
@@ -329,32 +356,60 @@ function fetchLectureList() {
     ORDER BY l.created_at DESC
   `);
 
-  return lectures.map(lecture => {
-    const chapters = db.query(`
-      SELECT id, lecture_id, title, slug, path, entry_file, order_index
-      FROM chapters WHERE lecture_id = ? ORDER BY order_index
-    `, [lecture.id]);
-    return getPublicLecture({ ...lecture, chapters });
+  // 一次查出全部章节按 lecture_id 分组，避免每个讲义单独查询（N+1）
+  const chaptersByLecture = new Map();
+  db.query(`
+    SELECT id, lecture_id, title, slug, path, entry_file, order_index
+    FROM chapters ORDER BY lecture_id, order_index
+  `).forEach(chapter => {
+    if (!chaptersByLecture.has(chapter.lecture_id)) {
+      chaptersByLecture.set(chapter.lecture_id, []);
+    }
+    chaptersByLecture.get(chapter.lecture_id).push(chapter);
   });
+
+  return lectures.map(lecture =>
+    getPublicLecture({ ...lecture, chapters: chaptersByLecture.get(lecture.id) || [] })
+  );
 }
 
 // 讲义列表 - 未登录返回公开，登录后自动返回公开+有权限，管理员返回全部
 router.get('/', optionalStudentAuth, (req, res) => {
   const allLectures = fetchLectureList();
 
-  // 检查是否是管理员请求
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  if (token) {
-    try {
-      const decoded = jwt.verify(token, JWT_SECRET);
-      if (decoded.role === 'admin') {
-        const admin = db.get('SELECT id FROM admins WHERE username = ?', [decoded.username]);
-        if (admin) return res.json(allLectures);
-      }
-    } catch {}
+  // 管理员旁路：与 adminAuth 同一校验（admins 存在 + 账号启用 + 密码未改）
+  const admin = resolveAdminFromToken(req.headers.authorization?.replace('Bearer ', ''));
+  if (admin) {
+    return res.json(allLectures);
   }
 
   res.json(filterAccessibleLectures(req.student?.id, allLectures));
+});
+
+// 讲义详情（按 slug）：给 Lecture 页用，替代"拉全量列表再 find"
+router.get('/detail/:slug', optionalStudentAuth, (req, res) => {
+  const lecture = db.get(`
+    SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.layout_mode, l.is_public, l.created_at,
+           c.name as category_name
+    FROM lectures l
+    LEFT JOIN categories c ON l.category_id = c.id
+    WHERE l.slug = ?
+  `, [req.params.slug]);
+
+  if (!lecture) {
+    return res.status(404).json({ error: '讲义不存在' });
+  }
+
+  const admin = resolveAdminFromToken(req.headers.authorization?.replace('Bearer ', ''));
+  if (!admin && !canAccessLecture(req.student?.id, lecture)) {
+    return res.status(403).json({ error: '无权限访问该讲义' });
+  }
+
+  lecture.chapters = db.query(`
+    SELECT id, lecture_id, title, slug, path, entry_file, order_index
+    FROM chapters WHERE lecture_id = ? ORDER BY order_index
+  `, [lecture.id]);
+  res.json(getPublicLecture(lecture));
 });
 
 // 学生的学习中心列表
