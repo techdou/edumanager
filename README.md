@@ -160,4 +160,4 @@ node --env-file=.env scripts/smoke_test.js  # 端到端冒烟测试
 
 ## License
 
-MIT
+Apache-2.0
