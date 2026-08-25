@@ -1,13 +1,26 @@
-# ===== 依赖 =====
-node_modules/
-**/node_modules/
+# ============================================================
+# EduManager .gitignore
+# 原则：
+#   1. 私密信息与密钥绝不入库（.env / 证书 / 密钥文件）
+#   2. 运行时数据不入库（数据库 / 讲义内容 / 上传文件 / 备份）
+#   3. 开发软件与 AI 编辑器配置目录不入库（.vscode / .idea / .claude 等）
+#   4. 内部文档不入库（docs/ 存放设计文档与路线图，仅本地）
+#   5. 构建产物与依赖不入库
+# ============================================================
 
-# ===== 环境变量与密钥（绝不提交）=====
+# ===== 密钥与环境变量（绝不提交）=====
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+secrets.json
+*.tfvars
 
-# ===== 运行时数据（由程序生成/写入）=====
+# ===== 运行时数据（由程序生成/写入，含用户数据与付费内容）=====
 data/
 lectures/
 server/uploads/
@@ -16,6 +29,28 @@ uploads/
 *.db-journal
 *.db-wal
 *.db-shm
+*.db.backup*
+*.sqlite
+
+# ===== 内部文档（仅本地，避免开发状态与内部设计泄漏）=====
+docs/
+
+# ===== 开发软件 / AI 编辑器配置目录 =====
+.vscode/
+.idea/
+.claude/
+.cursor/
+.zcode/
+.windsurf/
+.trae/
+.aider*
+continue/
+copilot*
+*.code-workspace
+
+# ===== 依赖 =====
+node_modules/
+**/node_modules/
 
 # ===== 构建产物 =====
 client/dist/
@@ -23,24 +58,27 @@ client/dist-backup*/
 .next/
 out/
 build/
+dist/
+coverage/
 
 # ===== 日志 =====
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 
-# ===== 系统/编辑器 =====
+# ===== 系统/编辑器临时文件 =====
 .DS_Store
 .DS_Store?
 Thumbs.db
 **/._*
-.vscode/
-.idea/
+desktop.ini
+*.swp
+*.swo
 
-# ===== 课程作业产物（与项目代码无关，防止误提交）=====
+# ===== 杂项 =====
+*.tsbuildinfo
 coursework/
 *.docx
-
-# ===== TypeScript 构建信息 =====
-*.tsbuildinfo
+tmp/
