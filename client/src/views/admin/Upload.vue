@@ -43,7 +43,7 @@
           <div class="form-group">
             <label class="form-label">讲义文件</label>
             <div class="file-upload">
-              <input type="file" @change="handleFile" accept=".zip,.html,.htm,text/html,application/zip" required class="file-input" />
+              <input type="file" :disabled="uploading" @change="handleFile" accept=".zip,.html,.htm,text/html,application/zip" required class="file-input" />
               <div class="file-upload-label">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
@@ -133,8 +133,10 @@
             <span>{{ success }}</span>
           </div>
 
-          <button @click="upload" class="btn btn-primary" :disabled="uploading || precheckLoading">
-            <span v-if="uploading">正在上传...</span>
+          <div v-if="error" class="retry-actions"><button v-if="file" @click="precheckFile" :disabled="precheckLoading || uploading">重新预检当前文件</button> <button @click="loadCategories">重新加载分类</button></div>
+          <progress v-if="uploading" :value="uploadPercent" max="100" aria-label="上传进度"></progress>
+          <button @click="upload" class="btn btn-primary" :disabled="uploading || precheckLoading || !zipCheck">
+            <span v-if="uploading">{{ uploadPercent < 100 ? `正在上传 ${uploadPercent}%` : '上传完成，正在处理讲义...' }}</span>
             <span v-else>上传讲义</span>
           </button>
         </div>
@@ -169,9 +171,9 @@ ai_learning.zip
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import axios from 'axios'
+import axios from '../../lib/http'
 
 const router = useRouter()
 const title = ref('')
@@ -187,41 +189,38 @@ const precheckLoading = ref(false)
 const error = ref('')
 const success = ref('')
 const zipCheck = ref(null)
+const uploadPercent = ref(0)
+let precheckVersion = 0
+let precheckController = null
+onUnmounted(() => { precheckVersion += 1; precheckController?.abort() })
 
-onMounted(async () => {
-  const res = await axios.get('/api/categories')
-  categories.value = res.data
-  if (categories.value.length === 0) {
-    showNewCategory.value = true
-  }
-})
+async function loadCategories() {
+  try {
+    categories.value = (await axios.get('/api/categories')).data
+    if (!categories.value.length) showNewCategory.value = true
+  } catch { error.value = '分类加载失败，请重试加载分类。' }
+}
+onMounted(loadCategories)
 
-async function handleFile(e) {
-  file.value = e.target.files[0]
-  error.value = ''
-  success.value = ''
-  zipCheck.value = null
-
-  if (!file.value) return
-  if (!/\.(zip|html?)$/i.test(file.value.name)) {
-    error.value = '仅支持 ZIP 或 HTML 文件'
-    return
-  }
-
+async function handleFile(event) {
+  file.value = event.target.files?.[0] || null
+  await precheckFile()
+}
+async function precheckFile() {
+  const selected = file.value
+  const version = ++precheckVersion
+  precheckController?.abort()
+  precheckController = new AbortController()
+  error.value = ''; success.value = ''; zipCheck.value = null; precheckLoading.value = false
+  if (!selected) return
+  if (!/\.(zip|html?)$/i.test(selected.name)) { error.value = '仅支持 ZIP 或 HTML 文件'; return }
   precheckLoading.value = true
   try {
-    const formData = new FormData()
-    formData.append('file', file.value)
-    const token = localStorage.getItem('adminToken')
-    const res = await axios.post('/api/lectures/precheck', formData, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {}
-    })
-    zipCheck.value = res.data
-  } catch (e) {
-    error.value = e.response?.data?.error || '讲义结构预检失败'
-  } finally {
-    precheckLoading.value = false
-  }
+    const data = new FormData(); data.append('file', selected)
+    const res = await axios.post('/api/lectures/precheck', data, { signal: precheckController.signal, timeout: 120000, authRole: 'admin' })
+    if (version === precheckVersion && selected === file.value) zipCheck.value = res.data
+  } catch (error_) { if (version === precheckVersion && error_.code !== 'ERR_CANCELED') error.value = error_.response?.data?.error || '预检失败，可保留当前文件重试。' }
+  finally { if (version === precheckVersion) precheckLoading.value = false }
 }
 
 function handleCover(e) {
@@ -279,7 +278,9 @@ async function upload() {
     return
   }
 
+  if (!zipCheck.value || precheckLoading.value) { error.value = '请等待当前文件预检通过后上传'; return }
   uploading.value = true
+  uploadPercent.value = 0
   error.value = ''
 
   const formData = new FormData()
@@ -294,6 +295,8 @@ async function upload() {
   try {
     const token = localStorage.getItem('adminToken')
     await axios.post('/api/lectures', formData, {
+      timeout: 180000,
+      onUploadProgress: event => { if (event.total) uploadPercent.value = Math.round(event.loaded / event.total * 100) },
       headers: token ? { Authorization: `Bearer ${token}` } : {}
     })
     success.value = '上传成功！即将跳转...'

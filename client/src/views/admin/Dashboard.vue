@@ -107,7 +107,8 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import axios from 'axios'
+import axios from '../../lib/http'
+import { ensureContentSession } from '../../lib/contentSession'
 import EditLectureModal from '../../components/EditLectureModal.vue'
 
 const lectures = ref([])
@@ -156,6 +157,7 @@ async function fetchLectures() {
   loading.value = true
   error.value = ''
   try {
+    await ensureContentSession(true)
     const token = localStorage.getItem('adminToken')
     const headers = token ? { Authorization: `Bearer ${token}` } : {}
     const [lectureRes, categoryRes] = await Promise.all([

@@ -1,9 +1,10 @@
 import axios from 'axios'
+import { authHeaders, clearAuth, loginLocation } from './auth'
 
 /**
  * 统一 HTTP 客户端：拦截请求/响应，集中处理鉴权、错误、超时。
  * - 请求：自动带 token（student 或 admin，按 baseUrl 判断）
- * - 响应：401 自动登出跳转、网络错误友好提示、超时重试
+ * - 响应：401 自动登出跳转、网络错误与超时友好提示
  *
  * 用法：业务代码用 api.get('/api/lectures')，错误已在此处统一处理，
  *       调用方只需关心"成功的数据"，失败时不会得到 undefined 而崩溃。
@@ -39,11 +40,10 @@ function showToast(message, type = 'error') {
 
 // 请求拦截：自动带 token
 api.interceptors.request.use((config) => {
-  // admin 接口用 adminToken，其余用 token
-  const isAdminApi = (config.baseURL || '').includes('/admin') || (config.url || '').includes('/api/admin')
-  const token = localStorage.getItem(isAdminApi ? 'adminToken' : 'token')
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`
+  const isAdminApi = config.authRole === 'admin' || (config.url || '').includes('/api/admin') || window.location.pathname.startsWith('/admin')
+  config.headers ||= {}
+  if (!config.headers?.Authorization && !config.headers?.authorization) {
+    Object.assign(config.headers, authHeaders(isAdminApi))
   }
   return config
 }, (error) => Promise.reject(error))
@@ -59,23 +59,18 @@ api.interceptors.response.use(
     // 取消的请求不处理
     if (axios.isCancel(error)) return Promise.reject(error)
 
+    if (error.config?.silent && status !== 401) return Promise.reject(error)
+
     if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
       showToast('请求超时，请检查网络后重试')
     } else if (!error.response) {
       // 网络错误 / 服务不可达
       showToast('网络连接失败，请检查网络或稍后重试')
     } else if (status === 401) {
-      // 未登录/token 失效：清理并跳登录
-      const isAdminApi = (error.config?.url || '').includes('/api/admin')
-      const tokenKey = isAdminApi ? 'adminToken' : 'token'
-      localStorage.removeItem(tokenKey)
-      // 避免在登录页死循环跳转
-      const path = window.location.pathname
-      if (isAdminApi && !path.startsWith('/admin/login') && !path.startsWith('/admin/register')) {
-        window.location.href = '/admin'
-      } else if (!isAdminApi && path !== '/login' && path !== '/register' && path !== '/') {
-        // 学生接口 401，引导登录但不强制跳转（首页可匿名看）
-        showToast(message || '登录已失效，请重新登录')
+      if (!error.config?.skipAuthRedirect && !/\/api\/auth\/(?:admin|student)\/(?:login|register)/.test(error.config?.url || '')) {
+        const admin = error.config?.authRole === 'admin' || window.location.pathname.startsWith('/admin')
+        clearAuth()
+        window.location.assign(loginLocation(admin))
       }
     } else if (status === 403) {
       showToast(message || '没有权限执行此操作')

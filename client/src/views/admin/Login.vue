@@ -34,10 +34,13 @@
 
 <script setup>
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
-import axios from 'axios'
+import { useRoute, useRouter } from 'vue-router'
+import axios from '../../lib/http'
+import { setAuth } from '../../lib/auth'
+import { safeReturnPath } from '../../lib/learning.mjs'
 
 const router = useRouter()
+const route = useRoute()
 const username = ref('')
 const password = ref('')
 const error = ref('')
@@ -51,8 +54,8 @@ async function login() {
       username: username.value,
       password: password.value
     })
-    localStorage.setItem('adminToken', res.data.token)
-    router.push('/admin/dashboard')
+    setAuth({ ...res.data, role: 'admin' })
+    router.replace(safeReturnPath(route.query.redirect, '/admin/dashboard'))
   } catch (e) {
     const msg = e.response?.data?.error
     if (msg?.includes('密码')) {

@@ -4,7 +4,7 @@
       <div class="login-header">
         <div class="logo">E</div>
         <h1 class="title">学生登录</h1>
-        <p class="subtitle">登录后即可浏览全部讲义</p>
+        <p class="subtitle">登录后可浏览获授权的课程与资料</p>
       </div>
       
       <form @submit.prevent="login" class="form">
@@ -39,17 +39,20 @@
         </button>
       </form>
       
-      <p class="hint">还没有账号？<router-link to="/register" style="color: var(--color-primary)">立即注册</router-link></p>
+      <p class="hint">还没有账号？<router-link :to="{ path: '/register', query: { redirect: route.query.redirect } }" style="color: var(--color-primary)">立即注册</router-link></p>
     </div>
   </div>
 </template>
 
 <script setup>
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
-import axios from 'axios'
+import { useRoute, useRouter } from 'vue-router'
+import axios from '../lib/http'
+import { setAuth } from '../lib/auth'
+import { safeReturnPath } from '../lib/learning.mjs'
 
 const router = useRouter()
+const route = useRoute()
 const username = ref('')
 const password = ref('')
 const error = ref('')
@@ -59,30 +62,9 @@ async function login() {
   loading.value = true
   error.value = ''
   try {
-    // Try admin login first, fall back to student login
-    let res
-    try {
-      res = await axios.post('/api/auth/admin/login', {
-        username: username.value,
-        password: password.value
-      })
-    } catch (e) {
-      // If admin login fails, try student login
-      res = await axios.post('/api/auth/student/login', {
-        username: username.value,
-        password: password.value
-      })
-    }
-    
-    const { token, role } = res.data
-    if (role === 'admin') {
-      localStorage.setItem('adminToken', token)
-      router.push('/admin/dashboard')
-    } else {
-      localStorage.setItem('token', token)
-      localStorage.setItem('studentUsername', res.data.username || username.value)
-      router.push('/')
-    }
+    const res = await axios.post('/api/auth/student/login', { username: username.value, password: password.value })
+    setAuth(res.data)
+    router.replace(safeReturnPath(route.query.redirect, '/learn'))
   } catch (e) {
     const msg = e.response?.data?.error
     if (msg?.includes('密码')) {

@@ -8,8 +8,18 @@ const db = require('../db');
 const config = require('../config');
 const logger = require('../logger');
 const adminAuth = require('../middleware/adminAuth');
+const { optionalStudentAuth } = require('../middleware/studentAuth');
+const { filterAccessibleLectures, canAccessLecture } = require('../utils/permissions');
+const { resolveContentFile } = require('../utils/contentFiles');
 
 const router = express.Router();
+router.use((req, res, next) => {
+  if (['GET', 'HEAD'].includes(req.method)) {
+    res.setHeader('Cache-Control', 'private, no-store');
+    return optionalStudentAuth(req, res, next);
+  }
+  next();
+});
 const storageRoot = config.knowledgeDir;
 const coverRoot = config.knowledgeCoverDir;
 fs.mkdirSync(storageRoot, { recursive: true });
@@ -17,7 +27,7 @@ fs.mkdirSync(coverRoot, { recursive: true });
 
 const upload = multer({
   dest: storageRoot,
-  limits: { fileSize: 50 * 1024 * 1024 }
+  limits: { fileSize: 50 * 1024 * 1024, files: 2, fields: 12, parts: 14 }
 });
 
 function normalizeDoc(body) {
@@ -32,7 +42,9 @@ function normalizeDoc(body) {
     || body.isFeatured === 'false'
     ? 0
     : 1;
-  return { title, url, summary, categoryId, source, isFeatured };
+  const publicValue = body.isPublic ?? body.is_public;
+  const isPublic = [true, 1, '1', 'true'].includes(publicValue) ? 1 : 0;
+  return { title, url, summary, categoryId, source, isFeatured, isPublic };
 }
 
 function isValidUrl(value) {
@@ -47,7 +59,7 @@ function isValidUrl(value) {
 function getDoc(id) {
   return db.get(`
     SELECT d.id, d.title, d.url, d.summary, d.category_id, d.source,
-           d.file_path, d.file_name, d.file_type, d.cover_path, d.is_featured,
+           d.file_path, d.file_name, d.file_type, d.cover_path, d.is_featured, d.is_public,
            d.created_at, d.updated_at, c.name AS category_name
     FROM knowledge_docs d
     LEFT JOIN categories c ON c.id = d.category_id
@@ -99,11 +111,38 @@ function isAllowedFile(file) {
 }
 
 function cleanupFile(file) {
-  if (file?.path && fs.existsSync(file.path)) fs.unlinkSync(file.path);
+  if (!file?.path) return;
+  try {
+    fs.unlinkSync(file.path);
+  } catch (err) {
+    if (err.code !== 'ENOENT') logger.error({ err: String(err) }, 'knowledge_cleanup_file_error');
+  }
 }
 
 function cleanupFiles(files = []) {
   files.forEach(cleanupFile);
+}
+
+// Uploaded resources remain provisional until the database transaction commits.
+function knowledgeWrite(handler) {
+  return (req, res, next) => {
+    const state = { committed: false };
+    try {
+      handler(req, res, state);
+    } catch (err) {
+      if (!state.committed) cleanupFiles(Object.values(req.files || {}).flat());
+      next(err);
+    }
+  };
+}
+
+function cleanupPreviousCover(relativePath, req) {
+  if (!relativePath) return;
+  try {
+    cleanupFile({ path: safeCoverPath(relativePath) });
+  } catch (err) {
+    logger.error({ reqId: req.id, id: req.params.id, err: String(err) }, 'knowledge_cleanup_cover_error');
+  }
 }
 
 function isAllowedCover(file) {
@@ -117,7 +156,9 @@ function saveCover(file) {
   if (!file) return null;
   const ext = path.extname(file.originalname).toLowerCase();
   const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
-  fs.renameSync(file.path, path.join(coverRoot, fileName));
+  const destination = path.join(coverRoot, fileName);
+  fs.renameSync(file.path, destination);
+  file.path = destination;
   return fileName;
 }
 
@@ -133,14 +174,14 @@ router.get('/', (req, res) => {
   const featuredOnly = req.query.featured === '1';
   const docs = db.query(`
     SELECT d.id, d.title, d.url, d.summary, d.category_id, d.source,
-           d.file_path, d.file_name, d.file_type, d.cover_path, d.is_featured,
+           d.file_path, d.file_name, d.file_type, d.cover_path, d.is_featured, d.is_public,
            d.created_at, d.updated_at, c.name AS category_name
     FROM knowledge_docs d
     LEFT JOIN categories c ON c.id = d.category_id
     ${featuredOnly ? 'WHERE d.is_featured = 1' : ''}
     ORDER BY d.is_featured DESC, d.updated_at DESC, d.id DESC
   `);
-  res.json(docs.map(getPublicDoc));
+  res.json(filterAccessibleLectures(req.student?.id, docs).map(getPublicDoc));
 });
 
 router.post('/', adminAuth, (req, res, next) => {
@@ -148,7 +189,7 @@ router.post('/', adminAuth, (req, res, next) => {
     if (err) return res.status(400).json({ error: '封面图上传失败: ' + err.message });
     next();
   });
-}, (req, res) => {
+}, knowledgeWrite((req, res, state) => {
   const cover = req.files?.cover?.[0];
   const doc = normalizeDoc(req.body);
   if (!doc.title || !doc.url) {
@@ -172,12 +213,16 @@ router.post('/', adminAuth, (req, res, next) => {
   }
 
   const coverPath = saveCover(cover);
-  const result = db.run(`
-    INSERT INTO knowledge_docs (title, url, summary, category_id, source, cover_path, is_featured)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `, [doc.title, doc.url, doc.summary, doc.categoryId, doc.source, coverPath, doc.isFeatured]);
-  res.status(201).json(getPublicDoc(getDoc(result.lastInsertRowid)));
-});
+  const saved = db.transaction(() => {
+    const result = db.run(`
+      INSERT INTO knowledge_docs (title, url, summary, category_id, source, cover_path, is_featured, is_public)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [doc.title, doc.url, doc.summary, doc.categoryId, doc.source, coverPath, doc.isFeatured, doc.isPublic]);
+    return getDoc(result.lastInsertRowid);
+  });
+  state.committed = true;
+  res.status(201).json(getPublicDoc(saved));
+}));
 
 router.post('/upload', adminAuth, (req, res, next) => {
   upload.fields([
@@ -192,10 +237,13 @@ router.post('/upload', adminAuth, (req, res, next) => {
     }
     next();
   });
-}, (req, res) => {
+}, knowledgeWrite((req, res, state) => {
   const file = req.files?.file?.[0];
   const cover = req.files?.cover?.[0];
-  if (!file) return res.status(400).json({ error: '请选择文件' });
+  if (!file) {
+    cleanupFile(cover);
+    return res.status(400).json({ error: '请选择文件' });
+  }
 
   const fileType = isAllowedFile(file);
   if (!fileType) {
@@ -228,32 +276,34 @@ router.post('/upload', adminAuth, (req, res, next) => {
   const storedName = `${file.filename}${ext}`;
   const storedPath = path.join(storageRoot, storedName);
   fs.renameSync(file.path, storedPath);
+  file.path = storedPath;
   const coverPath = saveCover(cover);
 
   // 事务：INSERT 与 UPDATE url 必须原子
-  const result = db.transaction(() => {
+  const saved = db.transaction(() => {
     const r = db.run(`
-      INSERT INTO knowledge_docs (title, url, summary, category_id, source, file_path, file_name, file_type, cover_path, is_featured)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [doc.title, `/api/knowledge/${0}/file`, doc.summary, doc.categoryId, fileType, storedName, file.originalname, fileType, coverPath, doc.isFeatured]);
+      INSERT INTO knowledge_docs (title, url, summary, category_id, source, file_path, file_name, file_type, cover_path, is_featured, is_public)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [doc.title, `/api/knowledge/${0}/file`, doc.summary, doc.categoryId, fileType, storedName, file.originalname, fileType, coverPath, doc.isFeatured, doc.isPublic]);
     db.run('UPDATE knowledge_docs SET url = ? WHERE id = ?', [`/api/knowledge/${r.lastInsertRowid}/file`, r.lastInsertRowid]);
-    return r;
+    return getDoc(r.lastInsertRowid);
   });
-  res.status(201).json(getPublicDoc(getDoc(result.lastInsertRowid)));
-});
+  state.committed = true;
+  res.status(201).json(getPublicDoc(saved));
+}));
 
 router.put('/:id', adminAuth, (req, res, next) => {
   upload.fields([{ name: 'cover', maxCount: 1 }])(req, res, (err) => {
     if (err) return res.status(400).json({ error: '封面图上传失败: ' + err.message });
     next();
   });
-}, (req, res) => {
+}, knowledgeWrite((req, res, state) => {
+  const cover = req.files?.cover?.[0];
   const existing = getDoc(req.params.id);
   if (!existing) {
+    cleanupFile(cover);
     return res.status(404).json({ error: '知识文档不存在' });
   }
-
-  const cover = req.files?.cover?.[0];
   const doc = normalizeDoc(req.body);
   if (!doc.title || (!doc.url && !existing.file_type)) {
     cleanupFile(cover);
@@ -276,29 +326,30 @@ router.put('/:id', adminAuth, (req, res, next) => {
   }
 
   const coverPath = saveCover(cover);
-  if (coverPath && existing.cover_path) {
-    const previousCover = safeCoverPath(existing.cover_path);
-    if (fs.existsSync(previousCover)) fs.unlinkSync(previousCover);
-  }
-
-  db.run(`
-    UPDATE knowledge_docs
-    SET title = ?, url = ?, summary = ?, category_id = ?, source = ?,
-        cover_path = COALESCE(?, cover_path), is_featured = ?,
-        updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-  `, [
-    doc.title,
-    existing.file_type ? existing.url : doc.url,
-    doc.summary,
-    doc.categoryId,
-    existing.file_type ? existing.source : doc.source,
-    coverPath,
-    doc.isFeatured,
-    req.params.id
-  ]);
-  res.json(getPublicDoc(getDoc(req.params.id)));
-});
+  const saved = db.transaction(() => {
+    db.run(`
+      UPDATE knowledge_docs
+      SET title = ?, url = ?, summary = ?, category_id = ?, source = ?,
+          cover_path = COALESCE(?, cover_path), is_featured = ?, is_public = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `, [
+      doc.title,
+      existing.file_type ? existing.url : doc.url,
+      doc.summary,
+      doc.categoryId,
+      existing.file_type ? existing.source : doc.source,
+      coverPath,
+      doc.isFeatured,
+      (req.body.isPublic === undefined && req.body.is_public === undefined) ? existing.is_public : doc.isPublic,
+      req.params.id
+    ]);
+    return getDoc(req.params.id);
+  });
+  state.committed = true;
+  if (coverPath) cleanupPreviousCover(existing.cover_path, req);
+  res.json(getPublicDoc(saved));
+}));
 
 router.get('/:id/file', (req, res) => {
   const doc = getDoc(req.params.id);
@@ -306,19 +357,20 @@ router.get('/:id/file', (req, res) => {
     return res.status(404).send('File not found');
   }
 
-  const filePath = safeFilePath(doc.file_path);
-  if (!fs.existsSync(filePath)) {
+  if (!canAccessLecture(req.student?.id, doc)) return res.status(403).json({ error: '没有该资料的访问权限' });
+  const filePath = resolveContentFile(storageRoot, doc.file_path);
+  if (!filePath) {
     return res.status(404).send('File not found');
   }
 
   if (doc.file_type === 'pdf') {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(doc.file_name || 'document.pdf')}"`);
-    return fs.createReadStream(filePath).pipe(res);
+    return res.sendFile(filePath);
   }
 
   res.setHeader('Content-Type', 'application/octet-stream');
-  return fs.createReadStream(filePath).pipe(res);
+  return res.sendFile(filePath);
 });
 
 router.get('/:id/markdown', (req, res) => {
@@ -327,8 +379,9 @@ router.get('/:id/markdown', (req, res) => {
     return res.status(404).json({ error: 'Markdown 文档不存在' });
   }
 
-  const filePath = safeFilePath(doc.file_path);
-  if (!fs.existsSync(filePath)) {
+  if (!canAccessLecture(req.student?.id, doc)) return res.status(403).json({ error: '没有该资料的访问权限' });
+  const filePath = resolveContentFile(storageRoot, doc.file_path);
+  if (!filePath) {
     return res.status(404).json({ error: 'Markdown 文件不存在' });
   }
 
@@ -342,8 +395,9 @@ router.get('/:id/cover', (req, res) => {
     return res.status(404).send('Cover not found');
   }
 
-  const coverPath = safeCoverPath(doc.cover_path);
-  if (!fs.existsSync(coverPath)) {
+  if (!canAccessLecture(req.student?.id, doc)) return res.status(403).json({ error: '没有该资料的访问权限' });
+  const coverPath = resolveContentFile(coverRoot, doc.cover_path);
+  if (!coverPath) {
     return res.status(404).send('Cover not found');
   }
   res.sendFile(coverPath);

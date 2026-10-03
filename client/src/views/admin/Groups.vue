@@ -110,7 +110,7 @@
 <script setup>
 import { onMounted, ref, computed } from 'vue'
 import adminApi from '../../lib/adminApi'
-import axios from 'axios'
+import axios from '../../lib/http'
 
 const groups = ref([])
 const loading = ref(false)

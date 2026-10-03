@@ -5,17 +5,16 @@
 const path = require('path');
 const fs = require('fs');
 
-// JWT_SECRET 强校验：缺失或过短直接拒绝启动，杜绝默认密钥伪造 token
+// Production keys must be explicit and must not be copied placeholders.
 const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
-  // 首次部署允许自动生成并写入 .env，但生产必须显式设置
-  console.error('[CONFIG] 致命错误：未设置 JWT_SECRET 环境变量。');
-  console.error('[CONFIG] 请在项目根目录 .env 文件中设置 JWT_SECRET=<至少32位随机字符串>');
-  console.error('[CONFIG] 示例生成：node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"');
-  // 开发环境兜底：NODE_ENV !== production 时给一个带警告的临时值，避免本地起不来
-  if (process.env.NODE_ENV === 'production') {
-    process.exit(1);
-  }
+const DEV_JWT_SECRET = '__dev_only_insecure_secret_do_not_use_in_prod__';
+const isProd = process.env.NODE_ENV === 'production';
+const placeholderSecret = /(?:请替换|替换为|至少\d+|__dev_only|change[-_ ]?me|your[-_ ]?(?:jwt[-_ ]?)?secret|replace[-_ ]?(?:me|this))/i;
+if (isProd && (!JWT_SECRET || JWT_SECRET.trim().length < 32 || JWT_SECRET !== JWT_SECRET.trim() || placeholderSecret.test(JWT_SECRET))) {
+  throw new Error('生产环境 JWT_SECRET 必须为至少 32 字符的随机密钥，不能使用模板或开发默认值');
+}
+if (!JWT_SECRET && !isProd) {
+  console.warn('[CONFIG] 开发环境未配置 JWT_SECRET，暂时使用仅供本地开发的默认值。');
 }
 
 const port = Number(process.env.PORT) || 3142;
@@ -32,40 +31,31 @@ const rootDir = path.resolve(__dirname, '..');
 const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(rootDir, 'data');
 const lecturesDir = process.env.LECTURES_DIR ? path.resolve(process.env.LECTURES_DIR) : path.join(rootDir, 'lectures');
 const dbPath = path.join(dataDir, 'edumanager.db');
+const backupDir = process.env.BACKUP_DIR ? path.resolve(process.env.BACKUP_DIR) : path.join(dataDir, 'backups');
+const backupRetention = Number(process.env.BACKUP_RETENTION ?? 7);
+if (!Number.isInteger(backupRetention) || backupRetention < 1) {
+  throw new Error('BACKUP_RETENTION 必须为大于 0 的整数');
+}
 
 // 确保关键目录存在
 fs.mkdirSync(dataDir, { recursive: true });
 fs.mkdirSync(lecturesDir, { recursive: true });
 
-// 依赖探测：unar/unzip 是上传讲义的必需外部工具
-function detectUnarchiver() {
-  const { execFileSync } = require('child_process');
-  for (const cmd of ['unar', 'unzip']) {
-    try {
-      execFileSync(cmd, ['-v'], { stdio: 'ignore' });
-      return cmd;
-    } catch {}
-  }
-  return null;
-}
-const unarchiver = detectUnarchiver();
-if (!unarchiver) {
-  console.warn('[CONFIG] 警告：未检测到 unar 或 unzip，上传 ZIP 讲义功能将不可用。');
-}
-
 module.exports = {
   port,
-  jwtSecret: JWT_SECRET || '__dev_only_insecure_secret_do_not_use_in_prod__',
+  jwtSecret: JWT_SECRET || DEV_JWT_SECRET,
   corsOrigin,
   rootDir,
   dataDir,
   lecturesDir,
   dbPath,
-  uploadsDir: path.join(__dirname, 'uploads'),
+  backupDir,
+  backupRetention,
+  lectureVersionsDir: path.join(dataDir, 'lecture-versions'),
+  uploadsDir: process.env.UPLOADS_DIR ? path.resolve(process.env.UPLOADS_DIR) : path.join(dataDir, 'uploads'),
   knowledgeDir: path.join(dataDir, 'knowledge'),
   lectureCoverDir: path.join(dataDir, 'covers', 'lectures'),
   knowledgeCoverDir: path.join(dataDir, 'covers', 'knowledge'),
-  unarchiver,
-  isProd: process.env.NODE_ENV === 'production',
-  isDev: process.env.NODE_ENV !== 'production'
+  isProd,
+  isDev: !isProd
 };

@@ -13,6 +13,10 @@ export default defineConfig({
       '/lectures': {
         target: 'http://localhost:3142',
         changeOrigin: true
+      },
+      '/content-bridge.js': {
+        target: 'http://localhost:3142',
+        changeOrigin: true
       }
     }
   }

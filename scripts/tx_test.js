@@ -1,30 +1,29 @@
-// 验证事务回滚：在 DB 层模拟多步写失败，确认不留幽灵记录
+// Never initialize or clean up the real application's database.
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'edumanager-transaction-'));
+Object.assign(process.env, {
+  NODE_ENV: 'test', DATA_DIR: path.join(directory, 'data'),
+  LECTURES_DIR: path.join(directory, 'lectures'), UPLOADS_DIR: path.join(directory, 'uploads'),
+  JWT_SECRET: 'temporary-transaction-test-secret-only'
+});
 const db = require('../server/db');
-db.init();
-
-const before = db.get('SELECT COUNT(*) c FROM categories').c;
-console.log(`事务前分类数: ${before}`);
-
-let rolledBack = false;
 try {
-  db.transaction(() => {
-    db.run("INSERT INTO categories (name) VALUES ('__tx_test_should_not_exist__')");
-    throw new Error('模拟失败');
-  });
-} catch (e) {
-  rolledBack = true;
+  db.init();
+  const before = db.get('SELECT COUNT(*) AS count FROM categories').count;
+  assert.throws(() => db.transaction(() => {
+    db.run("INSERT INTO categories(name) VALUES('__transaction_test__')");
+    throw new Error('simulated write failure');
+  }), /simulated write failure/);
+  assert.equal(db.get('SELECT COUNT(*) AS count FROM categories').count, before);
+  assert.equal(db.get("SELECT id FROM categories WHERE name='__transaction_test__'"), null);
+  console.log('事务回滚验证通过，未访问业务数据库。');
+} catch (error) {
+  console.error('事务验证失败:', error.message);
+  process.exitCode = 1;
+} finally {
+  db.close();
+  fs.rmSync(directory, { recursive: true, force: true });
 }
-
-const after = db.get('SELECT COUNT(*) c FROM categories').c;
-const ghost = db.get("SELECT id FROM categories WHERE name = '__tx_test_should_not_exist__'");
-
-console.log(`事务后分类数: ${after}`);
-console.log(`回滚生效: ${rolledBack && before === after ? '✓' : '✗'}`);
-console.log(`无幽灵记录: ${!ghost ? '✓' : '✗ (存在脏数据)'}`);
-
-// 清理冒烟测试注册的账号
-db.run("DELETE FROM students WHERE username LIKE 'smoke_%'");
-console.log('已清理冒烟测试账号');
-
-db.close();
-process.exit(before === after && !ghost ? 0 : 1);

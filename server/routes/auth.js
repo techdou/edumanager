@@ -7,6 +7,7 @@ const config = require('../config');
 const logger = require('../logger');
 const { studentAuth } = require('../middleware/studentAuth');
 const { getStudentGroups, getAccessibleCategories } = require('../utils/permissions');
+const { issueContentSession, clearContentSession } = require('../utils/contentSession');
 
 const JWT_SECRET = config.jwtSecret;
 
@@ -19,8 +20,14 @@ function logUserActivity(user, activityType, role, details = null) {
 }
 
 // 管理员登录
-router.post('/admin/login', async (req, res) => {
+router.post('/content-session', studentAuth, issueContentSession);
+router.post('/logout', clearContentSession);
+
+router.post('/admin/login', (req, res) => {
   const { username, password } = req.body;
+  if (typeof username !== 'string' || typeof password !== 'string' || !username || !password) {
+    return res.status(400).json({ error: '用户名和密码必填' });
+  }
   
   const admin = db.get('SELECT * FROM admins WHERE username = ?', [username]);
   
@@ -105,6 +112,9 @@ router.post('/student/register', (req, res) => {
 // 学生登录
 router.post('/student/login', (req, res) => {
   const { username, password } = req.body;
+  if (typeof username !== 'string' || typeof password !== 'string' || !username || !password) {
+    return res.status(400).json({ error: '用户名和密码必填' });
+  }
   
   const student = db.get('SELECT * FROM students WHERE username = ?', [username]);
   

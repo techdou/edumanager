@@ -32,6 +32,15 @@
           </div>
         </section>
 
+        <label class="search-field">搜索讲义、分类或章节<input v-model="search" type="search" placeholder="输入标题、分类或章节名称" /></label>
+        <section class="continue-panel">
+          <h2>继续学习</h2>
+          <p v-if="progressLoading" role="status">正在同步学习记录...</p>
+          <p v-if="progressError" role="alert">{{ progressError }} <button @click="refreshProgress" :disabled="progressLoading">重试同步</button></p>
+          <router-link v-for="item in continueItems" :key="`${item.lectureSlug}/${item.chapterSlug}`" :to="chapterUrl(item.lectureSlug, item.chapterSlug)" class="chapter-link">{{ item.lectureTitle }} · {{ item.chapterTitle }} · 阅读位置 {{ item.progress }}% · {{ item.completed ? '已完成' : '未完成' }}</router-link>
+          <p v-if="!progressLoading && !continueItems.length && !progressError">打开一个章节开始学习，记录会随账号同步。</p>
+        </section>
+        <div v-if="error" class="module-error" role="alert">{{ error }} <button @click="loadLectures" :disabled="loading">重试</button></div>
         <div v-if="loading" class="loading-grid">
           <div v-for="i in 6" :key="i" class="skeleton-card">
             <div class="skeleton" style="height: 24px; width: 60%; margin-bottom: 12px"></div>
@@ -39,11 +48,11 @@
           </div>
         </div>
 
-        <div v-else-if="lectures.length === 0" class="empty-state">
+        <div v-else-if="!error && filteredLectures.length === 0" class="empty-state">
           <div class="empty-state-icon">
             <svg width="64" height="64" viewBox="0 0 64 64" fill="none"><rect x="8" y="16" width="48" height="36" rx="4" fill="oklch(0.9 0.02 260)" stroke="oklch(0.7 0.02 260)" stroke-width="2"/><path d="M8 28H56" stroke="oklch(0.7 0.02 260)" stroke-width="2"/><rect x="14" y="34" width="16" height="4" rx="2" fill="oklch(0.7 0.02 260)" opacity="0.5"/></svg>
           </div>
-          <h3 class="empty-state-title">暂无可学习内容</h3>
+          <h3 class="empty-state-title">{{ search ? '没有匹配的讲义或章节' : '暂无可学习内容' }}</h3>
           <p class="empty-state-desc">您所在的班级暂无可访问的讲义，请联系管理员。</p>
         </div>
 
@@ -52,11 +61,7 @@
             <h2 class="category-title">{{ group.categoryName }}</h2>
             <div class="lecture-grid">
               <div v-for="lecture in group.lectures" :key="lecture.id" class="lecture-card card">
-                <div v-if="lecture.cover_url || firstChapterSrc(lecture)" class="resource-preview lecture-preview">
-                  <img v-if="lecture.cover_url" class="cover-image" :src="lecture.cover_url" :alt="`${lecture.title} 封面`" loading="lazy" />
-                  <iframe v-else :src="firstChapterSrc(lecture)" :title="`${lecture.title} 预览`" loading="lazy" sandbox="allow-scripts allow-same-origin"></iframe>
-                  <div class="preview-fade"></div>
-                </div>
+                <div v-if="lecture.cover_url" class="resource-preview lecture-preview"><img class="cover-image" :src="lecture.cover_url" :alt="`${lecture.title} 封面`" loading="lazy" /></div>
                 <div class="lecture-header">
                   <span class="lecture-category">{{ lecture.category_name || '未分类' }}</span>
                   <h3 class="lecture-title">{{ lecture.title }}</h3>
@@ -66,11 +71,11 @@
                   <router-link
                     v-for="chapter in lecture.chapters"
                     :key="chapter.id"
-                    :to="lecture.slug === chapter.slug ? `/lecture/${lecture.slug}` : `/lecture/${lecture.slug}/${chapter.slug}`"
+                    :to="chapterUrl(lecture.slug, chapter.slug)"
                     class="chapter-link"
                   >
                     <span class="chapter-dot"></span>
-                    {{ chapter.title }}
+                    {{ chapter.title }}{{ chapterStatus(chapter) }}
                   </router-link>
                 </div>
               </div>
@@ -85,63 +90,59 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import axios from 'axios'
-
+import api from '../lib/http'
+import { ensureContentSession, logoutSession } from '../lib/contentSession'
+import { cachedProgress, loadProgress } from '../lib/progress'
+import { chapterUrl, searchLectures } from '../lib/learning.mjs'
 const router = useRouter()
 const lectures = ref([])
-const loading = ref(true)
+const loading = ref(false)
+const error = ref('')
+const search = ref('')
+const progress = ref([])
+const progressError = ref('')
+const progressLoading = ref(false)
 const studentUsername = ref(localStorage.getItem('studentUsername') || '')
-
-function updateLoginState() {
-  studentUsername.value = localStorage.getItem('studentUsername') || ''
+function updateLoginState() { studentUsername.value = localStorage.getItem('studentUsername') || '' }
+async function logout() { try { await logoutSession() } finally { router.push('/') } }
+async function loadLectures() {
+  loading.value = true; error.value = ''
+  try { await ensureContentSession(); lectures.value = (await api.get('/api/lectures/my')).data }
+  catch { error.value = '课程加载失败，请检查连接后重试。' }
+  finally { loading.value = false }
 }
-
-function logout() {
-  localStorage.removeItem('token')
-  localStorage.removeItem('studentUsername')
-  router.push('/')
+async function refreshProgress() {
+  progressLoading.value = true; progressError.value = ''
+  try { progress.value = await loadProgress() }
+  catch { progress.value = cachedProgress(); progressError.value = '学习记录同步失败，当前显示此设备缓存。' }
+  finally { progressLoading.value = false }
 }
-
-function firstChapterSrc(lecture) {
-  const chapter = lecture.chapters?.[0]
-  if (!chapter?.path) return ''
-  const token = localStorage.getItem('token')
-  const query = token ? `?access_token=${encodeURIComponent(token)}` : ''
-  return `/lectures/${chapter.path}/${chapter.entry_file || 'index.html'}${query}`
-}
-
+const filteredLectures = computed(() => searchLectures(lectures.value, search.value))
 const groupedLectures = computed(() => {
   const map = new Map()
-  for (const lecture of lectures.value) {
-    const catName = lecture.category_name || '未分类'
-    if (!map.has(catName)) map.set(catName, [])
-    map.get(catName).push(lecture)
+  for (const lecture of filteredLectures.value) {
+    const name = lecture.category_name || '未分类'
+    if (!map.has(name)) map.set(name, [])
+    map.get(name).push(lecture)
   }
   return [...map.entries()].map(([categoryName, lectures]) => ({ categoryName, lectures }))
 })
-
-onMounted(async () => {
-  const token = localStorage.getItem('token')
-  if (!token) { router.push('/'); return }
-  try {
-    const res = await axios.get('/api/lectures/my', {
-      headers: { Authorization: `Bearer ${token}` }
-    })
-    lectures.value = res.data
-  } catch (e) {
-    if (e.response?.status === 401) router.push('/')
-  } finally {
-    loading.value = false
-  }
+const continueItems = computed(() => progress.value.filter(item => lectures.value.some(lecture => lecture.id === item.lecture_id || lecture.slug === item.lectureSlug)).slice(0, 3))
+function chapterStatus(chapter) { return progress.value.find(item => Number(item.chapter_id) === Number(chapter.id))?.completed ? ' · 已完成' : '' }
+onMounted(() => {
+  Promise.allSettled([loadLectures(), refreshProgress()])
   window.addEventListener('storage', updateLoginState)
+  window.addEventListener('auth-changed', updateLoginState)
 })
-
-onUnmounted(() => {
-  window.removeEventListener('storage', updateLoginState)
-})
+onUnmounted(() => { window.removeEventListener('storage', updateLoginState); window.removeEventListener('auth-changed', updateLoginState) })
 </script>
 
 <style scoped>
+.search-field { display: grid; gap: 8px; margin-bottom: 20px; }
+.search-field input { padding: 12px; border: 1px solid var(--color-border); border-radius: 8px; font: inherit; }
+.continue-panel { padding: 20px; margin: 20px 0; border: 1px solid var(--color-border); border-radius: 8px; }
+.continue-panel h2 { margin-bottom: 12px; }
+.module-error { padding: 16px; background: #fff4ed; margin: 16px 0; }
 .main-header {
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);

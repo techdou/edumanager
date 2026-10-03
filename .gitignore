@@ -1,20 +1,32 @@
-# ===== 依赖 =====
+# ===== 依赖（匹配根目录和子项目）=====
 node_modules/
-**/node_modules/
 
 # ===== 环境变量与密钥（绝不提交）=====
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+secrets.json
+*.tfvars
 
 # ===== 运行时数据（由程序生成/写入）=====
 data/
 lectures/
 server/uploads/
+uploads/
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
+*.db.backup*
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
 
 # ===== 构建产物 =====
 client/dist/
@@ -22,24 +34,41 @@ client/dist-backup*/
 .next/
 out/
 build/
+dist/
+*.tsbuildinfo
+
+# ===== 测试与浏览器验证产物 =====
+coverage/
+.nyc_output/
+.playwright-cli/
+output/playwright/
 
 # ===== 日志 =====
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 
 # ===== 系统/编辑器 =====
 .DS_Store
 .DS_Store?
 Thumbs.db
+desktop.ini
 **/._*
 .vscode/
 .idea/
+.claude/
+.cursor/
+.zcode/
+.windsurf/
+.trae/
+.aider*
+*.code-workspace
+*.swp
+*.swo
+tmp/
 
 # ===== 课程作业产物（与项目代码无关，防止误提交）=====
 coursework/
 *.docx
-
-# ===== TypeScript 构建信息 =====
-*.tsbuildinfo

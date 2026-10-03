@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { getToken, validToken, clearAuth, loginLocation } from '../lib/auth'
 
 const routes = [
   {
@@ -19,7 +20,7 @@ const routes = [
   {
     path: '/lecture/:slug/:chapter?',
     component: () => import('../views/Lecture.vue'),
-    meta: { requiresStudent: true, title: '讲义学习 - EduManager' }
+    meta: { title: '讲义学习 - EduManager' }
   },
   {
     path: '/learn',
@@ -96,15 +97,6 @@ const router = createRouter({
   routes
 })
 
-function isValidToken(token) {
-  try {
-    const payload = JSON.parse(atob(token.split('.')[1]))
-    return payload.exp * 1000 > Date.now()
-  } catch {
-    return false
-  }
-}
-
 const DEFAULT_TITLE = 'EduManager - 在线教育讲义管理平台'
 
 router.beforeEach((to, from, next) => {
@@ -114,19 +106,19 @@ router.beforeEach((to, from, next) => {
 
   // Admin guard
   if (to.meta.requiresAdmin) {
-    const token = localStorage.getItem('adminToken')
-    if (!token || !isValidToken(token)) {
-      localStorage.removeItem('adminToken')
-      next('/admin')
+    const token = getToken(true)
+    if (!token || !validToken(token)) {
+      clearAuth()
+      next(loginLocation(true, to.fullPath))
       return
     }
   }
   // Student guard
   if (to.meta.requiresStudent) {
-    const token = localStorage.getItem('token')
-    if (!token || !isValidToken(token)) {
-      localStorage.removeItem('token')
-      next('/')
+    const token = getToken()
+    if (!token || !validToken(token)) {
+      clearAuth()
+      next(loginLocation(false, to.fullPath))
       return
     }
   }

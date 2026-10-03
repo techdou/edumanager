@@ -1,120 +1,73 @@
-# EduManager 权限系统重构设计文档
+# EduManager 权限与学习内容设计
 
-## 一、需求概述
+## 访问模型
 
-### 1. 首页公开精选 + 登录后完整内容
-- 未登录用户访问首页，只能看到"公开精选"讲义（标记为 is_public=1）
-- 登录用户访问首页，看到完整讲义列表（含公开+有权限的）
-- 管理员上传/编辑讲义时可设置"公开展示"开关
+匿名用户只能看到公开内容。有效学生可看到公开内容，以及其所属班级获授权分类中的内容；有效管理员可访问全部内容。讲义与知识库使用相同判定，未分类的私有资料不因登录自动开放。
 
-### 2. 分级展示：两个页面
-- **首页（/）**：公开精选内容，未登录可见，有登录入口
-- **学习中心（/learn）**：登录后可见，展示该学生有权限查看的全部讲义
-- **学生中心**：学生个人信息页面，展示所属班级和可查看的讲义
-
-### 3. B（班级）+ C（分类权限）混合模型
-- **班级（Group）**：学生属于某个班级，班级有权限访问某些分类
-- **分类权限**：每个分类可以设置哪些班级有权限访问
-- **混合判断**：学生能看到的讲义 = 公开讲义 OR (学生所在班级有权限访问该讲义所属分类)
-
-### 4. 学生注册强调实名
-- real_name 字段已在 auth.js 中改为必填
-- 注册页面 UI 需同步更新
-
-## 二、数据模型（已有基础，需补充）
-
-### 已存在的表
-- `lectures`：已有 `is_public`（默认0）、`layout_mode`、`category_id`
-- `chapters`：已有 `entry_file`
-- `groups`：班级表（name, description）
-- `group_students`：学生-班级关联
-- `group_category_permissions`：班级-分类权限关联
-
-### 需要补充
-- 无新表，使用现有表结构
-
-## 三、API 设计
-
-### 后端修改
-
-#### 1. lecture.js - 列表接口改造
-```
-GET /api/lectures          → 公开列表（首页用，只返回 is_public=1）
-GET /api/lectures?all=1    → 完整列表（需登录，含权限判断）
-GET /api/lectures/my       → 我的学习中心（根据班级+分类权限返回）
+```text
+允许读取 = 内容公开
+        OR 当前账号为有效管理员
+        OR 当前学生所在班级获授权访问内容所属分类
 ```
 
-#### 2. 新增权限判断函数
-```js
-function getStudentGroups(studentId) { ... }
-function getAccessibleCategories(studentId) { ... }
-function canAccessLecture(studentId, lecture) { ... }
-```
+账号身份从签名凭证识别，但学生状态、管理员身份、班级归属及分类授权以当前数据库为准。停用账号或撤销授权后，后续请求重新检查权限。管理员授权与普通学生授权不会仅凭客户端角色字段判断。
 
-#### 3. 管理员接口
-```
-PUT /api/lectures/:id/public   → 设置公开展示开关
-GET /api/admin/groups          → 班级列表
-POST /api/admin/groups         → 创建班级
-PUT /api/admin/groups/:id      → 编辑班级
-DELETE /api/admin/groups/:id   → 删除班级
-POST /api/admin/groups/:id/students       → 添加学生到班级
-DELETE /api/admin/groups/:id/students/:sid → 移除学生
-POST /api/admin/groups/:id/categories     → 设置班级可访问分类
-```
+首页显示当前访问者可见内容，学习中心要求登录，学生中心显示账号、班级和可访问分类。列表隐藏无权限内容；直接请求目录、HTML、相对资源、封面或知识库文件同样检查权限。
 
-### 前端修改
+## 数据与公开状态
 
-#### 1. 路由
-```
-/          → Home.vue（改造：未登录显示公开精选，登录后显示完整内容+学习中心入口）
-/learn     → Learn.vue（新增：学习中心，需登录）
-/profile   → Profile.vue（新增：学生中心，展示班级和权限）
-```
+- `lectures.is_public` 与 `knowledge_docs.is_public` 默认 0，管理员可显式公开。
+- `group_students` 关联学生与班级，`group_category_permissions` 关联班级与分类。
+- `chapters` 关联讲义、章节地址和入口文件。
+- `student_progress` 以学生、讲义、章节组成唯一记录，保存阅读百分比、完成状态及更新时间。
 
-#### 2. 首页改造
-- 未登录：显示公开精选讲义卡片 + 登录/注册按钮
-- 已登录：显示完整讲义列表 + 学习中心入口
+旧知识库资料不会因为曾出现在首页而自动公开。升级后管理员应检查公开开关，确认哪些资料允许匿名访问。应用只控制本地资料访问；外部飞书链接的最终访问仍由飞书自身权限决定。
 
-#### 3. 学习中心（/learn）
-- 展示该学生有权限查看的所有讲义
-- 按分类分组展示
-- 阅读进度追踪
+版本化迁移保存在 `schema_migrations`，缺失迁移事务执行。新学习进度表包含外键及章节归属约束；历史表的孤立关联另行审计报告，不静默清理。
 
-#### 4. 学生中心（/profile）
-- 个人信息（用户名、真实姓名、邮箱）
-- 所属班级
-- 可访问的分类权限列表
+## 登录与只读内容会话
 
-#### 5. 管理员后台
-- 讲义管理：增加"公开展示"开关
-- 新增"班级管理"页面
-- 用户管理：显示所属班级，可分配班级
+业务 API 通过 Authorization 的 Bearer 登录凭证认证，写入不接受内容 Cookie，也不接受 URL `access_token`。前端登录跳转仅允许站内安全路径，拒绝外部地址、反斜线、控制字符和登录页循环。
 
-## 四、权限判断逻辑
+浏览器 iframe、图片和 PDF 请求不能直接附加业务 Authorization。前端在打开资料前调用 `POST /api/auth/content-session`，服务端签发最多 30 分钟、且不超过原登录剩余有效期的短期内容凭证：
 
-```
-学生能否访问某讲义：
-  IF lecture.is_public == 1 → true
-  IF 学生未登录 → false
-  IF 学生登录：
-    获取学生所在的所有班级
-    获取这些班级有权限访问的所有分类
-    IF lecture.category_id IN 可访问分类 → true
-    ELSE → false
-```
+| Cookie 属性/路径 | 行为 |
+| --- | --- |
+| HttpOnly、Secure | 脚本不可读取，使用安全连接 |
+| `/lectures` | SameSite=None，支持不具备应用同源权限的讲义 iframe 附属资源 |
+| `/api/knowledge`、`/api/lectures` | SameSite=Strict，供知识库资源及讲义封面读取 |
+| 凭证作用域 | 仅接受上述路径的 GET/HEAD，仍检查当前账号及内容权限 |
 
-## 五、实现顺序
+`POST /api/auth/logout` 清除对应路径的内容 Cookie，前端清理登录状态。生产使用 HTTPS；HTTP `localhost`/`127.0.0.1` 的安全 Cookie 行为及沙箱支持存在浏览器差异，Safari/Firefox 还需在部署 HTTPS 环境验证，不能据此宣称所有平台兼容。
 
-1. 后端：改造 lecture.js 列表接口，支持公开/权限过滤
-2. 后端：实现 groups 管理 API
-3. 后端：实现权限判断工具函数
-4. 前端：改造 Home.vue（公开精选展示）
-5. 前端：创建 Learn.vue（学习中心）
-6. 前端：创建 Profile.vue（学生中心）
-7. 前端：改造注册页面（强调实名）
-8. 前端：管理员后台 - 班级管理页面
-9. 前端：管理员后台 - 讲义公开展示开关
-10. 路由改造
-11. 测试
-12. Git push + 部署
+## 讲义隔离与文件边界
+
+上传 HTML 保留自己的脚本能力。iframe 和内容 CSP 允许 `allow-scripts`、`allow-same-site-none-cookies`，不允许 `allow-same-origin`，使讲义脚本不能读取应用同源存储。应用注入 `/content-bridge.js`，通过 `postMessage` 交换阅读准备、滚动百分比、活动标题、位置恢复及目录跳转；父页面只接受当前讲义 frame 发来的消息。
+
+资源请求先按当前讲义检查权限，再验证路径位于当前讲义目录，真实文件路径也不能通过符号链接逃逸。公开与私有资料使用相同路径约束。受控内容响应禁用缓存，并设置 `nosniff` 与无 referrer 策略。
+
+ZIP 上传限制体积、条目数、目录深度、压缩比和处理时间，校验实际解压大小及校验码，拒绝穿越、符号链接和重复路径。校验与解压在工作线程完成；有效内容暂存后才替换当前目录。数据库异常有文件补偿回滚，上一版本保留内容和元数据供管理员恢复。
+
+文件系统操作与数据库提交不能形成同一个事务；异常补偿不保证断电或 SIGKILL 下的联合原子性。当前讲义写操作在单进程内串行化，数据目录锁阻止第二个服务或维护写进程进入。部署不能直接启用多进程集群。
+
+## 学习进度接口
+
+| 接口 | 规则 |
+| --- | --- |
+| `GET /api/progress` | 只返回当前账号仍可访问的有效讲义与章节记录 |
+| `PUT /api/progress/:lectureId/:chapterId` | 保存 `{ position: 0..100, completed?: boolean }`；验证登录、章节归属及访问权限 |
+| `GET /api/lectures`、`GET /api/lectures/my` | 按当前访问者过滤；`my` 要求登录 |
+| `GET /api/lectures/toc/:lectureSlug/:chapterSlug` | 检查所属讲义权限后读取目录 |
+| `GET /api/lectures/:id/versions` | 管理员查询上一版本 |
+| `POST /api/lectures/:id/restore` | 管理员恢复上一版本内容，保留当前访问地址、分类和公开状态 |
+| `GET /api/knowledge`、`GET /api/knowledge/:id/file`、`/markdown`、`/cover` | 列表及具体资源均检查权限 |
+
+滚动保存阅读位置，完成状态由用户明确操作；省略 `completed` 时保留已有状态。服务端记录按账号隔离，客户端缓存也按账号分离。前端对保存进行节流和顺序处理，避免较旧请求覆盖较新位置。
+
+替换或恢复讲义版本会删除并重建章节，相关学习进度通过外键删除。上一版本不是学习记录快照。后续若需保留换包后的学习记录，须引入稳定章节标识及明确映射规则。
+
+## 备份与验证边界
+
+完整备份包含数据库、讲义及上一版本、知识库、封面、版本元数据和校验清单。只允许停服维护或启动监听之前执行；先校验备份，再发布备份目录。恢复仅允许新空目录，验证成功后由操作者配置切换。生产启动备份发生在迁移后，升级前恢复点必须提前保留。
+
+权限、越权路径、内容凭证写入限制、账号进度隔离、上传失败补偿及备份恢复由隔离测试覆盖。真实浏览器的资源 Cookie、脚本隔离与位置恢复另外验证；生产性能、多设备兼容性和恢复演练不能由 API 测试替代。验收状态以 [UPGRADE_PLAN.md](UPGRADE_PLAN.md) 为准。

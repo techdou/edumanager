@@ -1,46 +1,34 @@
 const jwt = require('jsonwebtoken');
 const db = require('../db');
 const config = require('../config');
+const { contentCookie } = require('../utils/contentSession');
 
-const JWT_SECRET = config.jwtSecret;
+function authenticate(req, allowContentCookie = false) {
+  const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+  const cookie = !bearer && allowContentCookie ? contentCookie(req) : null;
+  const token = bearer || cookie;
+  if (!token) return null;
+  let decoded;
+  try {
+    decoded = jwt.verify(token, config.jwtSecret, { algorithms: ['HS256'] });
+  } catch { return null; }
+  if ((cookie && decoded.scope !== 'content') || (!cookie && decoded.scope)) return null;
+  if (!Number.isInteger(decoded.id) || typeof decoded.username !== 'string') return null;
+  // Database failures are server failures, not expired sessions.
+  const user = db.get('SELECT id, username, status FROM students WHERE id = ? AND username = ?', [decoded.id, decoded.username]);
+  if (!user || user.status !== 'active') return null;
+  const admin = db.get('SELECT id FROM admins WHERE username = ?', [user.username]);
+  return { id: user.id, username: user.username, role: admin ? 'admin' : 'student', exp: decoded.exp };
+}
 
 function studentAuth(req, res, next) {
-  const token = req.headers.authorization?.replace('Bearer ', '') || req.query.access_token;
-
-  if (!token) {
-    return res.status(401).json({ error: '未登录' });
-  }
-
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const user = db.get('SELECT id, username, status FROM students WHERE id = ? AND username = ?', [decoded.id, decoded.username]);
-    if (!user || user.status === 'disabled') {
-      return res.status(401).json({ error: '登录已过期' });
-    }
-    req.student = { id: decoded.id, username: decoded.username, role: decoded.role };
-    next();
-  } catch (e) {
-    return res.status(401).json({ error: '登录已过期' });
-  }
+  req.student = authenticate(req);
+  if (!req.student) return res.status(401).json({ error: '登录已失效，请重新登录' });
+  next();
 }
 
 function optionalStudentAuth(req, res, next) {
-  const token = req.headers.authorization?.replace('Bearer ', '') || req.query.access_token;
-  if (!token) {
-    req.student = null;
-    return next();
-  }
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const user = db.get('SELECT id, username, status FROM students WHERE id = ? AND username = ?', [decoded.id, decoded.username]);
-    if (!user || user.status === 'disabled') {
-      req.student = null;
-    } else {
-      req.student = { id: decoded.id, username: decoded.username, role: decoded.role };
-    }
-  } catch {
-    req.student = null;
-  }
+  req.student = authenticate(req, true);
   next();
 }
 

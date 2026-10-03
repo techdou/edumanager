@@ -128,19 +128,20 @@
         </div>
       </section>
 
+      <div v-if="errors.progress" role="alert" class="module-error">{{ errors.progress }} <button @click="loadRecentItems" :disabled="busy.progress">重试同步</button></div>
       <section v-if="recentItems.length > 0" class="continue-panel">
         <div class="continue-heading">
           <div>
             <p class="eyebrow">继续学习</p>
             <h2>最近打开</h2>
           </div>
-          <button type="button" class="clear-recent" @click="clearRecent">清空</button>
+          <button type="button" class="clear-recent" @click="loadRecentItems" :disabled="busy.progress">刷新记录</button>
         </div>
         <div class="recent-grid">
           <router-link
             v-for="item in recentItems"
             :key="`${item.lectureSlug}-${item.chapterSlug}`"
-            :to="item.lectureSlug === item.chapterSlug ? `/lecture/${item.lectureSlug}` : `/lecture/${item.lectureSlug}/${item.chapterSlug}`"
+            :to="chapterUrl(item.lectureSlug, item.chapterSlug)"
             class="recent-card"
           >
             <div>
@@ -150,12 +151,14 @@
             <div class="progress-track" aria-hidden="true">
               <span :style="{ width: `${item.progress || 0}%` }"></span>
             </div>
-            <small>{{ item.progress || 0 }}% · {{ formatRecentTime(item.updatedAt) }}</small>
+            <small>阅读位置 {{ item.progress || 0 }}% · {{ item.completed ? '已完成' : '未完成' }} · {{ formatRecentTime(item.updatedAt) }}</small>
           </router-link>
         </div>
       </section>
 
-      <section v-if="knowledgeDocs.length > 0" class="knowledge-panel">
+      <div v-if="busy.knowledge" role="status">正在加载知识文档...</div>
+      <div v-if="errors.knowledge" role="alert" class="module-error">{{ errors.knowledge }} <button @click="loadModule('knowledge')" :disabled="busy.knowledge">重试</button></div>
+      <section v-if="knowledgeDocs.length > 0 && contentReady" class="knowledge-panel">
         <div class="section-heading">
           <div>
             <p class="eyebrow">飞书知识库</p>
@@ -195,7 +198,7 @@
               <div v-if="doc.summary" class="summary-markdown" v-html="renderMd(doc.summary)"></div>
               <p v-else>管理员暂未填写简介。</p>
               <button v-if="doc.summary" class="detail-btn" @click="openSummaryModal(doc)">查看详情 ›</button>
-              <a :href="doc.file_url || doc.url" target="_blank" rel="noopener noreferrer" class="open-link">
+              <a :href="doc.file_url || doc.url" @click.prevent="openDoc(doc)" class="open-link">
                 {{ doc.file_type ? '打开文档' : '打开飞书文档' }}
               </a>
             </div>
@@ -218,6 +221,8 @@
         </Transition>
       </Teleport>
 
+      <label class="search-field">搜索讲义、分类或章节<input v-model="search" type="search" placeholder="输入标题、分类或章节名称" /></label>
+      <div v-if="errors.categories" role="alert" class="module-error">{{ errors.categories }} <button @click="loadModule('categories')">重试</button></div>
       <!-- Category Filters -->
       <div class="filters">
         <button 
@@ -236,6 +241,7 @@
         </button>
       </div>
 
+      <div v-if="errors.lectures" role="alert" class="module-error">{{ errors.lectures }} <button @click="loadModule('lectures')" :disabled="loading">重试</button></div>
       <!-- Loading State -->
       <div v-if="loading" class="loading-grid">
         <div v-for="i in 6" :key="i" class="skeleton-card">
@@ -249,7 +255,7 @@
       </div>
       
       <!-- Empty State -->
-      <div v-else-if="filteredLectures.length === 0" class="empty-state">
+      <div v-else-if="!errors.lectures && filteredLectures.length === 0" class="empty-state">
         <div class="empty-state-icon">
           <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
             <rect x="8" y="16" width="48" height="36" rx="4" fill="oklch(0.9 0.02 260)" stroke="oklch(0.7 0.02 260)" stroke-width="2"/>
@@ -260,7 +266,7 @@
             <path d="M42 46H50M46 42V50" stroke="oklch(0.5 0.08 35)" stroke-width="2" stroke-linecap="round"/>
           </svg>
         </div>
-        <h3 class="empty-state-title">暂无讲义</h3>
+        <h3 class="empty-state-title">{{ search ? '没有匹配的讲义或章节' : '暂无讲义' }}</h3>
         <p class="empty-state-desc">
           管理员尚未上传任何讲义内容。<br>
           讲义上传后会自动显示在这里。
@@ -270,26 +276,8 @@
       <!-- Lecture Grid -->
       <div v-else class="lecture-grid">
         <div v-for="lecture in filteredLectures" :key="lecture.id" class="lecture-card card">
-          <div v-if="lecture.cover_url || firstChapterSrc(lecture)" class="resource-preview lecture-preview">
-            <img
-              v-if="lecture.cover_url"
-              class="cover-image"
-              :src="lecture.cover_url"
-              :alt="`${lecture.title} 封面`"
-              loading="lazy"
-            />
-            <iframe
-              v-else
-              :src="firstChapterSrc(lecture)"
-              :title="`${lecture.title} 预览`"
-              loading="lazy"
-              sandbox="allow-scripts allow-same-origin"
-            ></iframe>
-            <div class="preview-fade"></div>
-            <div v-if="!isLoggedIn" class="preview-lock" @click="showLoginTip">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-              <span>登录后查看</span>
-            </div>
+          <div v-if="lecture.cover_url" class="resource-preview lecture-preview">
+            <img class="cover-image" :src="lecture.cover_url" :alt="`${lecture.title} 封面`" loading="lazy" />
           </div>
           <div class="lecture-header">
             <span class="lecture-category">{{ lecture.category_name || '未分类' }}</span>
@@ -317,7 +305,11 @@
 
 <script setup>
 import { defineAsyncComponent, reactive, ref, computed, onMounted, onUnmounted } from 'vue'
-import axios from 'axios'
+import axios from '../lib/http'
+import { getToken } from '../lib/auth'
+import { ensureContentSession, logoutSession, openDocument } from '../lib/contentSession'
+import { cachedProgress, loadProgress } from '../lib/progress'
+import { chapterUrl, searchLectures } from '../lib/learning.mjs'
 import MarkdownIt from 'markdown-it'
 
 const md = new MarkdownIt({ html: false })
@@ -355,28 +347,19 @@ const isLoggedIn = ref(!!localStorage.getItem('token'))
 const studentUsername = ref(localStorage.getItem('studentUsername') || '')
 const recentItems = ref([])
 
-const recentKeyPrefix = 'edumanager:recentLectures'
+const search = ref('')
+const errors = reactive({ categories: '', lectures: '', knowledge: '', progress: '' })
+const busy = reactive({ categories: false, lectures: false, knowledge: false, progress: false })
+const contentReady = ref(false)
+const moduleVersions = { lectures: 0, knowledge: 0, categories: 0 }
 const loginTipVisible = ref(false)
 let loginTipTimer = null
 
-function currentUserKey() {
-  const token = localStorage.getItem('token')
-  if (!token) return 'guest'
-  try {
-    return JSON.parse(atob(token.split('.')[1])).id || localStorage.getItem('studentUsername') || 'student'
-  } catch {
-    return localStorage.getItem('studentUsername') || 'student'
-  }
-}
-
-function recentKey() {
-  return `${recentKeyPrefix}:${currentUserKey()}`
-}
-
 function updateLoginState() {
-  isLoggedIn.value = !!localStorage.getItem('token')
+  isLoggedIn.value = !!getToken()
+  lectures.value = []; knowledgeDocs.value = []; recentItems.value = []
   studentUsername.value = localStorage.getItem('studentUsername') || ''
-  loadRecentItems()
+  Promise.allSettled([loadModule('lectures'), loadModule('knowledge'), loadRecentItems()])
 }
 
 function showLoginTip() {
@@ -386,45 +369,24 @@ function showLoginTip() {
 }
 
 function goLecture(lectureSlug, chapterSlug) {
-  if (!isLoggedIn.value) {
-    showLoginTip()
-    return
-  }
-  if (lectureSlug === chapterSlug) {
-    window.location.href = `/lecture/${lectureSlug}`
-  } else {
-    window.location.href = `/lecture/${lectureSlug}/${chapterSlug}`
-  }
+  window.location.href = chapterUrl(lectureSlug, chapterSlug)
 }
 
-function logout() {
-  // 清除学生登录态
-  localStorage.removeItem('token')
-  localStorage.removeItem('studentUsername')
-  // 清除管理员登录态（如果有）
-  localStorage.removeItem('adminToken')
-  updateLoginState()
+async function logout() {
+  try { await logoutSession() } finally { updateLoginState() }
 }
 
-function loadRecentItems() {
-  if (!isLoggedIn.value) {
-    recentItems.value = []
-    return
-  }
-  try {
-    recentItems.value = JSON.parse(
-      localStorage.getItem(recentKey())
-      || localStorage.getItem(recentKeyPrefix)
-      || '[]'
-    ).slice(0, 3)
-  } catch {
-    recentItems.value = []
-  }
+async function loadRecentItems() {
+  errors.progress = ''
+  if (!getToken()) { recentItems.value = []; return }
+  busy.progress = true
+  try { recentItems.value = (await loadProgress()).slice(0, 3) }
+  catch { recentItems.value = cachedProgress().slice(0, 3); errors.progress = '学习记录同步失败，暂时显示此设备缓存。' }
+  finally { busy.progress = false }
 }
 
-function clearRecent() {
-  localStorage.removeItem(recentKey())
-  recentItems.value = []
+async function openDoc(doc) {
+  try { await openDocument(doc) } catch { errors.knowledge = '文档打开失败，请重试。' }
 }
 
 function formatRecentTime(value) {
@@ -436,14 +398,6 @@ function formatRecentTime(value) {
   const hours = Math.floor(minutes / 60)
   if (hours < 24) return `${hours} 小时前`
   return `${Math.floor(hours / 24)} 天前`
-}
-
-function firstChapterSrc(lecture) {
-  const chapter = lecture.chapters?.[0]
-  if (!chapter?.path) return ''
-  const token = localStorage.getItem('token')
-  const query = token ? `?access_token=${encodeURIComponent(token)}` : ''
-  return `/lectures/${chapter.path}/${chapter.entry_file || 'index.html'}${query}`
 }
 
 function previewHint(doc) {
@@ -460,37 +414,53 @@ function docHost(url) {
   }
 }
 
-const filteredLectures = computed(() => {
-  if (selectedCategory.value === 'all') return lectures.value
-  return lectures.value.filter(l => l.category_id === selectedCategory.value)
-})
+const filteredLectures = computed(() => searchLectures(lectures.value, search.value, selectedCategory.value))
+const totalChapters = computed(() => lectures.value.reduce((sum, lecture) => sum + (lecture.chapters?.length || 0), 0))
 
-const totalChapters = computed(() => lectures.value.reduce((s, l) => s + (l.chapters?.length || 0), 0))
+async function loadModule(name) {
+  const version = ++moduleVersions[name]
+  const token = getToken()
+  busy[name] = true
+  errors[name] = ''
+  if (name === 'lectures') loading.value = true
+  try {
+    if (name === 'knowledge') {
+      contentReady.value = false
+      await ensureContentSession()
+      const { data } = await axios.get('/api/knowledge', { params: { featured: 1 } })
+      if (version !== moduleVersions[name] || token !== getToken()) return
+      knowledgeDocs.value = data
+      contentReady.value = true
+    } else {
+      const { data } = await axios.get(name === 'categories' ? '/api/categories' : '/api/lectures')
+      if (version !== moduleVersions[name] || token !== getToken()) return
+      if (name === 'categories') categories.value = data
+      else lectures.value = data
+    }
+  } catch { if (version !== moduleVersions[name]) return; errors[name] = ({ categories: '分类加载失败', lectures: '讲义加载失败', knowledge: '知识文档加载失败' })[name] }
+  finally { if (version === moduleVersions[name]) { busy[name] = false; if (name === 'lectures') loading.value = false } }
+}
 
-onMounted(async () => {
-  const token = localStorage.getItem('token')
-  const headers = token ? { Authorization: `Bearer ${token}` } : {}
-  const [catRes, lecRes, knowledgeRes] = await Promise.all([
-    axios.get('/api/categories'),
-    axios.get('/api/lectures', { headers }),
-    axios.get('/api/knowledge', { params: { featured: 1 } })
-  ])
-  categories.value = catRes.data
-  lectures.value = lecRes.data
-  knowledgeDocs.value = knowledgeRes.data
-  loading.value = false
-  updateLoginState()
+onMounted(() => {
+  Promise.allSettled([loadModule('categories'), loadModule('lectures'), loadModule('knowledge'), loadRecentItems()])
   window.addEventListener('storage', updateLoginState)
+  window.addEventListener('auth-changed', updateLoginState)
   window.addEventListener('focus', loadRecentItems)
 })
-
 onUnmounted(() => {
   window.removeEventListener('storage', updateLoginState)
+  window.removeEventListener('auth-changed', updateLoginState)
   window.removeEventListener('focus', loadRecentItems)
+  clearTimeout(loginTipTimer)
+  document.body.style.overflow = ''
 })
 </script>
 
 <style scoped>
+.module-error { margin: 16px 0; padding: 14px; background: #fff4ed; border: 1px solid #f4cbb3; border-radius: 8px; }
+.module-error button { margin-left: 12px; }
+.search-field { display: grid; gap: 8px; margin: 20px 0; }
+.search-field input { padding: 12px; border: 1px solid var(--color-border); border-radius: 8px; font: inherit; }
 /* ====== Login Tip Toast ====== */
 .login-tip {
   position: fixed;

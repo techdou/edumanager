@@ -44,6 +44,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import { logoutSession } from '../../lib/contentSession'
 import { useRoute, useRouter } from 'vue-router'
 
 const route = useRoute()
@@ -64,9 +65,8 @@ const pageTitle = computed(() => {
   return matched?.label || '管理后台'
 })
 
-function logout() {
-  localStorage.removeItem('adminToken')
-  router.push('/admin')
+async function logout() {
+  try { await logoutSession() } finally { router.push('/admin') }
 }
 </script>
 

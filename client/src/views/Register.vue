@@ -59,17 +59,20 @@
         </button>
       </form>
       
-      <p class="hint">已有账号？<router-link to="/login" style="color: var(--color-primary)">立即登录</router-link></p>
+      <p class="hint">已有账号？<router-link :to="{ path: '/login', query: { redirect: route.query.redirect } }" style="color: var(--color-primary)">立即登录</router-link></p>
     </div>
   </div>
 </template>
 
 <script setup>
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
-import axios from 'axios'
+import { useRoute, useRouter } from 'vue-router'
+import axios from '../lib/http'
+import { setAuth } from '../lib/auth'
+import { safeReturnPath } from '../lib/learning.mjs'
 
 const router = useRouter()
+const route = useRoute()
 const username = ref('')
 const realName = ref('')
 const password = ref('')
@@ -99,15 +102,8 @@ async function register() {
       password: password.value,
       real_name: realName.value.trim()
     })
-    const { token, username: uname, role } = res.data
-    if (role === 'admin') {
-      localStorage.setItem('adminToken', token)
-      router.push('/admin/dashboard')
-    } else {
-      localStorage.setItem('token', token)
-      localStorage.setItem('studentUsername', uname)
-      router.push('/')
-    }
+    setAuth(res.data)
+    router.replace(safeReturnPath(route.query.redirect, res.data.role === 'admin' ? '/admin/dashboard' : '/learn'))
   } catch (e) {
     const msg = e.response?.data?.error
     if (msg?.includes('exists')) {

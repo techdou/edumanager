@@ -8,14 +8,16 @@
  * - query/run/get 接口与旧实现完全兼容，routes 零改动
  */
 const Database = require('better-sqlite3');
-const fs = require('fs');
-const path = require('path');
 const config = require('./config');
 const logger = require('./logger');
+const { createBackup, acquireDataLock } = require('./utils/backup');
 
 let db;
+let releaseLock;
+let backupInProgress = false;
+let live = false;
 
-// ===== 规范化 Schema（取代旧版 ALTER TABLE 堆叠补字段的方式）=====
+// 新库基线；已有库通过下方有版本记录的迁移补齐。
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS admins (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,48 +111,111 @@ const SCHEMA_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_lectures_is_public ON lectures(is_public)`
 ];
 
-// 初始化
-function initDb() {
-  try {
-    db = new Database(config.dbPath);
-    // WAL 模式：写不阻塞读，崩溃后自动恢复，无全量落盘风险
-    db.pragma('journal_mode = WAL');
-    // 正常 + FULL 同步：兼顾性能与数据安全（崩溃时损坏概率极低）
-    db.pragma('synchronous = NORMAL');
-    // 启用外键约束
-    db.pragma('foreign_keys = ON');
-    // 占用 busy 超时 5s，避免偶发锁冲突直接抛错
-    db.pragma('busy_timeout = 5000');
+// Each version is committed together with its ledger entry. Historical rows are never deleted.
+const COMPATIBLE_COLUMNS = {
+  admins: { created_at: 'DATETIME' },
+  students: { email: 'TEXT', status: "TEXT DEFAULT 'active'", last_login: 'DATETIME', real_name: 'TEXT', created_at: 'DATETIME' },
+  categories: { created_at: 'DATETIME' },
+  lectures: { category_id: 'INTEGER', cover_path: 'TEXT', description: 'TEXT', layout_mode: "TEXT DEFAULT 'system'", is_public: 'INTEGER DEFAULT 0', created_at: 'DATETIME' },
+  chapters: { entry_file: "TEXT DEFAULT 'index.html'", order_index: 'INTEGER DEFAULT 0' },
+  user_activity: { user_id: 'INTEGER', role: "TEXT DEFAULT 'student'", details: 'TEXT', created_at: 'DATETIME' },
+  knowledge_docs: { summary: 'TEXT', category_id: 'INTEGER', source: "TEXT DEFAULT 'feishu'", file_path: 'TEXT', file_name: 'TEXT', file_type: 'TEXT', cover_path: 'TEXT', is_featured: 'INTEGER DEFAULT 1', is_public: 'INTEGER DEFAULT 0', created_at: 'DATETIME', updated_at: 'DATETIME' },
+  groups: { description: 'TEXT', created_at: 'DATETIME' }
+};
 
-    // 建 schema
-    for (const sql of SCHEMA_STATEMENTS) {
-      db.exec(sql);
+const MIGRATIONS = [
+  { version: 1, name: 'baseline_and_legacy_columns', apply(database) {
+    for (const sql of SCHEMA_STATEMENTS.filter(sql => sql.startsWith('CREATE TABLE'))) database.exec(sql);
+    for (const [table, columns] of Object.entries(COMPATIBLE_COLUMNS)) {
+      const existing = new Set(database.pragma(`table_info(${table})`).map(column => column.name));
+      for (const [column, definition] of Object.entries(columns)) {
+        if (!existing.has(column)) database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+      }
     }
+    for (const sql of SCHEMA_STATEMENTS.filter(sql => sql.startsWith('CREATE INDEX'))) database.exec(sql);
+    database.exec("UPDATE students SET status = 'active' WHERE status IS NULL OR status = ''");
+    database.exec(`INSERT OR IGNORE INTO students (username, password_hash, status, created_at)
+      SELECT username, password_hash, 'active', COALESCE(created_at, CURRENT_TIMESTAMP) FROM admins`);
+  } },
+  { version: 2, name: 'account_learning_progress', apply(database) {
+    database.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_chapters_id_lecture ON chapters(id, lecture_id)`);
+    database.exec(`CREATE TABLE student_progress (
+      student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      lecture_id INTEGER NOT NULL REFERENCES lectures(id) ON DELETE CASCADE,
+      chapter_id INTEGER NOT NULL,
+      position REAL NOT NULL DEFAULT 0 CHECK(position >= 0 AND position <= 100),
+      completed INTEGER NOT NULL DEFAULT 0 CHECK(completed IN (0, 1)),
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (student_id, lecture_id, chapter_id),
+      FOREIGN KEY (chapter_id, lecture_id) REFERENCES chapters(id, lecture_id) ON DELETE CASCADE
+    )`);
+    database.exec('CREATE INDEX idx_student_progress_updated ON student_progress(student_id, updated_at)');
+  } }
+];
 
-    // 旧库迁移兼容：如果 admins 表里有数据但 students 表里没有对应记录，
-    // 则插入（保持与旧 ensureSchema 一致的自愈逻辑）
-    ensureAdminStudentSync();
+function migrate(database) {
+  database.transaction(() => {
+    database.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`);
+    const applied = new Set(database.prepare('SELECT version FROM schema_migrations').all().map(row => row.version));
+    if ([...applied].some(version => version > MIGRATIONS.at(-1).version)) throw new Error('数据库版本高于当前程序，拒绝降级启动');
+    for (const migration of MIGRATIONS) {
+      if (applied.has(migration.version)) continue;
+      migration.apply(database);
+      database.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)').run(migration.version, migration.name);
+    }
+  })();
+}
 
-    // 兜底：历史数据可能有 status 为空
-    db.prepare("UPDATE students SET status = 'active' WHERE status IS NULL OR status = ''").run();
+// Report old relationships without silently removing user data or adding invalid constraints.
+function audit(database) {
+  const tables = new Set(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map(row => row.name));
+  const relationships = [
+    ['chapters', 'lecture_id', 'lectures'], ['lectures', 'category_id', 'categories'],
+    ['knowledge_docs', 'category_id', 'categories'], ['group_students', 'group_id', 'groups'],
+    ['group_students', 'student_id', 'students'], ['group_category_permissions', 'group_id', 'groups'],
+    ['group_category_permissions', 'category_id', 'categories']
+  ];
+  const orphaned = [];
+  for (const [child, column, parent] of relationships) {
+    if (!tables.has(child) || !tables.has(parent) || !database.pragma(`table_info(${child})`).some(field => field.name === column)) continue;
+    const count = database.prepare(`SELECT COUNT(*) AS count FROM ${child} c LEFT JOIN ${parent} p ON c.${column} = p.id WHERE c.${column} IS NOT NULL AND p.id IS NULL`).get().count;
+    if (count) orphaned.push({ table: child, column, count });
+  }
+  return {
+    integrity: database.pragma('integrity_check'),
+    foreignKeyViolations: database.pragma('foreign_key_check'),
+    orphaned,
+    migrations: tables.has('schema_migrations') ? database.prepare('SELECT version, name, applied_at FROM schema_migrations ORDER BY version').all() : []
+  };
+}
 
+function initDb() {
+  if (db?.open) return db;
+  try {
+    releaseLock = acquireDataLock(config.dataDir);
+    db = new Database(config.dbPath);
+    db.pragma('journal_mode = WAL');
+    db.pragma('synchronous = NORMAL');
+    db.pragma('foreign_keys = ON');
+    db.pragma('busy_timeout = 5000');
+    migrate(db);
+    const report = audit(db);
+    if (report.integrity.some(row => row.integrity_check !== 'ok') || report.foreignKeyViolations.length) {
+      throw new Error('数据库完整性校验失败，请运行迁移审计并从已验证备份恢复');
+    }
+    if (report.orphaned.length) logger.warn({ orphaned: report.orphaned }, 'db_legacy_orphans_detected');
+    live = false;
     logger.info({ dbPath: config.dbPath }, 'db_ready');
     return db;
   } catch (err) {
-    logger.error({ err: err && err.stack ? err.stack : String(err) }, 'db_init_error');
+    if (db?.open) db.close();
+    if (releaseLock) { releaseLock(); releaseLock = null; }
+    logger.error({ err: err.stack || String(err) }, 'db_init_error');
     throw err;
-  }
-}
-
-// 旧 ensureSchema 的等价逻辑：每个 admin 在 students 表里也应有对应记录
-function ensureAdminStudentSync() {
-  const admins = query('SELECT username, password_hash, created_at FROM admins');
-  const insertStudent = db.prepare(`
-    INSERT OR IGNORE INTO students (username, password_hash, status, created_at)
-    VALUES (?, ?, 'active', ?)
-  `);
-  for (const admin of admins) {
-    insertStudent.run(admin.username, admin.password_hash, admin.created_at);
   }
 }
 
@@ -164,6 +229,7 @@ function isWriteSql(sql) {
 }
 
 function query(sql, params = []) {
+  if (backupInProgress && isWriteSql(sql)) throw new Error('备份过程中禁止写数据库');
   const stmt = db.prepare(sql);
   if (isWriteSql(sql)) {
     stmt.run(...params);
@@ -174,6 +240,7 @@ function query(sql, params = []) {
 
 // run: 执行写操作，返回 { lastInsertRowid }
 function run(sql, params = []) {
+  if (backupInProgress) throw new Error('备份过程中禁止写数据库');
   const result = db.prepare(sql).run(...params);
   return { lastInsertRowid: result.lastInsertRowid };
 }
@@ -183,9 +250,9 @@ function get(sql, params = []) {
   return db.prepare(sql).get(...params) || null;
 }
 
-// ===== 新增能力：事务（供 P1-3 使用）=====
-// 用法： db.transaction(() => { db.run(...); db.run(...); })()
+// 同步事务：db.transaction(() => { db.run(...); db.run(...); })
 function transaction(fn) {
+  if (backupInProgress) throw new Error('备份过程中禁止写数据库');
   return db.transaction(fn)();
 }
 
@@ -194,37 +261,36 @@ function prepare(sql) {
   return db.prepare(sql);
 }
 
-// 关闭（优雅关闭时调用）
+// The server marks the database live immediately before listen, preventing unsafe in-process backups.
+function markLive() { live = true; }
+
 function close() {
-  try {
-    if (db) db.close();
-    logger.info('db_closed');
-  } catch (e) {
-    logger.error({ err: String(e) }, 'db_close_error');
-  }
+  if (backupInProgress) throw new Error('备份尚未完成，不能关闭数据库');
+  if (db?.open) db.close();
+  if (releaseLock) { releaseLock(); releaseLock = null; }
+  live = false;
+  logger.info('db_closed');
 }
 
-// 在线备份（启动时调用一次，及手动触发）
-function backup(suffix = '') {
-  const ts = new Date().toISOString().replace(/[:.]/g, '-');
-  const backupPath = path.join(config.dataDir, `edumanager.db.backup${suffix}.${ts}`);
+async function backup(suffix = '') {
+  if (!db?.open) throw new Error('数据库尚未初始化');
+  if (live) throw new Error('完整备份需要先停止服务');
+  if (backupInProgress) throw new Error('已有备份正在执行');
+  backupInProgress = true;
   try {
-    db.backup(backupPath);
+    const backupPath = await createBackup(db, config, suffix);
     logger.info({ backupPath }, 'db_backup_done');
     return backupPath;
-  } catch (e) {
-    logger.error({ err: String(e) }, 'db_backup_error');
-    return null;
+  } catch (error) {
+    logger.error({ err: error.message }, 'db_backup_error');
+    throw error;
+  } finally {
+    backupInProgress = false;
   }
 }
 
 module.exports = {
   init: initDb,
-  query,
-  run,
-  get,
-  transaction,
-  prepare,
-  close,
-  backup
+  query, run, get, transaction, prepare, close, backup, markLive,
+  migrate, audit
 };

@@ -8,14 +8,17 @@ const config = require('./config');
 const logger = require('./logger');
 const { optionalStudentAuth } = require('./middleware/studentAuth');
 const { canAccessLecture } = require('./utils/permissions');
+const { resolveContentFile } = require('./utils/contentFiles');
 
 const authRoutes = require('./routes/auth');
 const lectureRoutes = require('./routes/lecture');
 const categoryRoutes = require('./routes/category');
 const adminRoutes = require('./routes/admin');
 const knowledgeRoutes = require('./routes/knowledge');
+const progressRoutes = require('./routes/progress');
 
 const app = express();
+app.disable('x-powered-by');
 const PORT = config.port;
 
 // 请求日志 + requestId（结构化，脱敏 query 中的 token）
@@ -23,7 +26,7 @@ app.use((req, res, next) => {
   req.id = req.headers['x-request-id'] || crypto.randomUUID();
   res.setHeader('X-Request-Id', req.id);
   res.on('finish', () => {
-    const safeUrl = req.url.replace(/([?&]access_token=)[^&]+/i, '$1***');
+    const safeUrl = req.originalUrl.replace(/([?&]access_token=)[^&]+/gi, '$1***');
     logger.info({ reqId: req.id, method: req.method, url: safeUrl, status: res.statusCode, ms: Date.now() - req.startTime || '-' }, 'req');
   });
   req.startTime = Date.now();
@@ -32,19 +35,33 @@ app.use((req, res, next) => {
 
 app.use(cors({ origin: config.corsOrigin }));
 app.use(express.json({ limit: '2mb' }));
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  next();
+});
 
 app.use('/api/auth', authRoutes);
 app.use('/api/lectures', lectureRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/knowledge', knowledgeRoutes);
+app.use('/api/progress', progressRoutes);
+app.use('/api', (req, res) => res.status(404).json({ error: '接口不存在' }));
 
 // 健康检查（无需鉴权，供负载均衡/监控探活）
 app.get('/health', (req, res) => {
-  res.json({ ok: true, uptime: process.uptime(), ts: Date.now() });
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    db.get('SELECT 1 AS ok');
+    res.json({ ok: true, uptime: process.uptime(), ts: Date.now() });
+  } catch {
+    res.status(503).json({ ok: false });
+  }
 });
 
-const lecturesRoot = path.resolve(__dirname, '../lectures');
+const lecturesRoot = config.lecturesDir;
+app.get('/content-bridge.js', (req, res) => res.sendFile(path.join(__dirname, 'content-bridge.js')));
 app.get('/lectures/:lectureSlug/*', optionalStudentAuth, (req, res) => {
   const lecture = db.get('SELECT id, slug, category_id, is_public FROM lectures WHERE slug = ?', [req.params.lectureSlug]);
   if (!lecture) {
@@ -54,9 +71,22 @@ app.get('/lectures/:lectureSlug/*', optionalStudentAuth, (req, res) => {
     return res.status(403).send('Forbidden');
   }
 
-  const requested = path.resolve(lecturesRoot, req.params.lectureSlug, req.params[0] || '');
-  if (!requested.startsWith(`${lecturesRoot}${path.sep}`) || !fs.existsSync(requested)) {
+  const lectureRoot = path.resolve(lecturesRoot, lecture.slug);
+  const requested = lectureRoot.startsWith(`${path.resolve(lecturesRoot)}${path.sep}`)
+    ? resolveContentFile(lectureRoot, req.params[0] || '') : null;
+  if (!requested) {
     return res.status(404).send('File not found');
+  }
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.setHeader('Content-Security-Policy', "sandbox allow-scripts allow-same-site-none-cookies; frame-ancestors 'self'");
+  if (/\.(html?|xhtml)$/i.test(requested)) {
+    // Uploaded HTML keeps its own scripts but cannot access the app's origin/storage.
+    if (req.method === 'HEAD') return res.type('html').end();
+    return fs.readFile(requested, 'utf8', (err, html) => {
+      if (err) return res.status(500).send('Lecture temporarily unavailable');
+      const bridge = '<script src="/content-bridge.js"></script>';
+      res.type('html').send(/<\/body\s*>/i.test(html) ? html.replace(/<\/body\s*>/i, `${bridge}</body>`) : html + bridge);
+    });
   }
   res.sendFile(requested);
 });
@@ -88,17 +118,12 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: '服务器内部错误' });
 });
 
-// 2) 进程级兜底：未捕获的异常/promise 拒绝绝不退出进程
-process.on('uncaughtException', (err) => {
-  logger.error({ err: err && err.stack ? err.stack : String(err) }, 'uncaughtException');
-});
-process.on('unhandledRejection', (reason) => {
-  logger.error({ reason: reason && reason.stack ? reason.stack : String(reason) }, 'unhandledRejection');
-});
-
 // 3) 优雅关闭：收到信号时停止接收新连接、等已接收请求处理完、关库
 let server;
+let shuttingDown = false;
 function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
   logger.info({ signal }, 'shutdown_start');
   if (!server) return process.exit(0);
   server.close((err) => {
@@ -112,26 +137,32 @@ function shutdown(signal) {
     process.exit(1);
   }, 10000).unref();
 }
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
-
-// 启动数据库并监听（db.init 为同步，包裹 try/catch）
-try {
+async function start(port = PORT) {
   db.init();
-  // 启动时自动备份一次（仅生产，避免开发时频繁备份）
   if (config.isProd) {
-    db.backup('.startup') ;
+    await db.backup('.startup');
   }
-  server = app.listen(PORT, () => logger.info({ port: PORT }, 'server_started'));
-  server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-      logger.error({ port: PORT }, 'port_in_use');
-    } else {
-      logger.error({ err: err && err.stack ? err.stack : String(err) }, 'listen_error');
-    }
-    process.exit(1);
+  db.markLive();
+  await new Promise((resolve, reject) => {
+    server = app.listen(port, resolve);
+    server.once('error', reject);
   });
-} catch (err) {
-  logger.error({ err: err && err.stack ? err.stack : String(err) }, 'db_init_error');
-  process.exit(1);
+  logger.info({ port: server.address().port }, 'server_started');
+  return server;
 }
+
+if (require.main === module) {
+  // After a fatal error, stop immediately; a process supervisor may safely restart us.
+  const fatal = (err) => {
+    logger.error({ err: err?.stack || String(err) }, 'fatal_error');
+    try { db.close(); } catch {}
+    process.exit(1);
+  };
+  process.on('uncaughtException', fatal);
+  process.on('unhandledRejection', fatal);
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  start().catch(fatal);
+}
+
+module.exports = { app, start };

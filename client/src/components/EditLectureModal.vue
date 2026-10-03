@@ -71,7 +71,7 @@
           <h3>内容重新上传（可选）</h3>
           <div class="form-group">
             <div class="file-upload" :class="{ active: contentFile }">
-              <input type="file" @change="handleContentFile" accept=".zip,.html,.htm" />
+              <input type="file" :disabled="saving" @change="handleContentFile" accept=".zip,.html,.htm" />
               <span v-if="contentFile">
                 <strong>{{ contentFile.name }}</strong>
                 <small>{{ formatSize(contentFile.size) }}</small>
@@ -112,6 +112,12 @@
           </p>
         </div>
 
+        <section class="form-section">
+          <h3>上一版内容</h3>
+          <button class="btn-ghost" @click="loadVersions" :disabled="versionsLoading || saving">{{ versionsLoading ? '正在加载...' : '查看上一版' }}</button>
+          <p v-if="!versionsLoading && !versions.length" class="hint">暂无可恢复版本。成功替换内容后会保留上一版。</p>
+          <div v-for="version in versions" :key="version.id"><p>{{ version.title }} · {{ version.chapter_count }} 个章节 · {{ version.created_at }}</p><button class="btn-ghost" @click="restoreVersion" :disabled="saving">恢复上一版</button></div>
+        </section>
         <!-- 章节管理 -->
         <div class="form-section">
           <h3>章节管理（拖拽排序）</h3>
@@ -134,14 +140,15 @@
           <p class="hint">拖拽 ⋮⋮ 可调整章节顺序，直接修改输入框可重命名</p>
         </div>
 
-        <div v-if="error" class="error-alert">{{ error }}</div>
+        <div v-if="error" class="error-alert">{{ error }} <button v-if="contentFile" @click="precheckContent" :disabled="saving || precheckLoading">重新预检</button></div>
+        <progress v-if="saving" :value="uploadPercent" max="100" aria-label="上传进度"></progress>
         <div v-if="success" class="success-alert">{{ success }}</div>
       </div>
 
       <div class="edit-footer">
         <button class="btn-ghost" @click="close">取消</button>
-        <button class="btn-primary" @click="save" :disabled="saving">
-          {{ saving ? '保存中...' : '保存' }}
+        <button class="btn-primary" @click="save" :disabled="saving || precheckLoading || (contentFile && !zipCheck)">
+          {{ saving ? (uploadPercent < 100 ? `上传 ${uploadPercent}%` : '正在处理...') : '保存' }}
         </button>
       </div>
     </div>
@@ -149,8 +156,8 @@
 </template>
 
 <script setup>
-import { ref, watch, nextTick } from 'vue'
-import axios from 'axios'
+import { ref, watch, onUnmounted } from 'vue'
+import axios from '../lib/http'
 
 const props = defineProps({
   visible: Boolean,
@@ -175,10 +182,38 @@ const error = ref('')
 const success = ref('')
 const saving = ref(false)
 const dragIndex = ref(null)
+const uploadPercent = ref(0)
+const versions = ref([])
+const versionsLoading = ref(false)
+let precheckVersion = 0
+let precheckController = null
+let versionRequest = 0
+onUnmounted(() => { precheckVersion += 1; versionRequest += 1; precheckController?.abort() })
+async function loadVersions() {
+  if (!props.lecture) return
+  const request = ++versionRequest
+  versionsLoading.value = true
+  try {
+    const { data } = await axios.get(`/api/lectures/${props.lecture.id}/versions`, { authRole: 'admin' })
+    if (request === versionRequest) versions.value = data
+  } catch { if (request === versionRequest) error.value = '历史版本加载失败，可重试。' }
+  finally { if (request === versionRequest) versionsLoading.value = false }
+}
+async function restoreVersion() {
+  if (!confirm('恢复上一版讲义内容、封面与章节？当前分类、URL 和公开设置保持不变。')) return
+  saving.value = true; error.value = ''
+  try {
+    const { data } = await axios.post(`/api/lectures/${props.lecture.id}/restore`, {}, { authRole: 'admin', timeout: 180000 })
+    emit('saved', data); close()
+  } catch (failure) { error.value = failure.response?.data?.error || '恢复失败，当前内容已保留，请重试。' }
+  finally { saving.value = false }
+}
 
 // 当 lecture 变化时初始化表单
 watch(() => props.lecture, (lecture) => {
   if (lecture) {
+    precheckVersion += 1; precheckController?.abort(); versions.value = []
+    loadVersions()
     form.value = {
       title: lecture.title || '',
       slug: lecture.slug || '',
@@ -208,32 +243,24 @@ function handleCover(e) {
   error.value = ''
 }
 
-function handleContentFile(e) {
-  const file = e.target.files[0]
-  if (!file) return
-  if (!/\.(zip|html?)$/i.test(file.name)) {
-    error.value = '仅支持 ZIP 或 HTML 文件'
-    contentFile.value = null
-    return
-  }
-  contentFile.value = file
-  error.value = ''
-  zipCheck.value = null
-  
-  // 预检
+function handleContentFile(event) {
+  contentFile.value = event.target.files?.[0] || null
+  precheckContent()
+}
+async function precheckContent() {
+  const selected = contentFile.value
+  const version = ++precheckVersion
+  precheckController?.abort(); precheckController = new AbortController()
+  zipCheck.value = null; error.value = ''; precheckLoading.value = false
+  if (!selected) return
+  if (!/\.(zip|html?)$/i.test(selected.name)) { error.value = '仅支持 ZIP 或 HTML 文件'; return }
   precheckLoading.value = true
-  const formData = new FormData()
-  formData.append('file', file)
-  const token = localStorage.getItem('adminToken')
-  axios.post('/api/lectures/precheck', formData, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {}
-  }).then(res => {
-    zipCheck.value = res.data
-  }).catch(e => {
-    error.value = e.response?.data?.error || '预检失败'
-  }).finally(() => {
-    precheckLoading.value = false
-  })
+  try {
+    const data = new FormData(); data.append('file', selected)
+    const res = await axios.post('/api/lectures/precheck', data, { authRole: 'admin', signal: precheckController.signal, timeout: 120000 })
+    if (version === precheckVersion && selected === contentFile.value) zipCheck.value = res.data
+  } catch (failure) { if (version === precheckVersion && failure.code !== 'ERR_CANCELED') error.value = failure.response?.data?.error || '预检失败，可重试当前文件。' }
+  finally { if (version === precheckVersion) precheckLoading.value = false }
 }
 
 function formatSize(bytes) {
@@ -276,7 +303,9 @@ async function save() {
     return
   }
 
+  if (contentFile.value && !zipCheck.value) { error.value = '请等待当前文件预检通过'; return }
   saving.value = true
+  uploadPercent.value = 0
   error.value = ''
   success.value = ''
 
@@ -295,7 +324,8 @@ async function save() {
     if (contentFile.value) formData.append('file', contentFile.value)
 
     const res = await axios.put(`/api/lectures/${props.lecture.id}`, formData, {
-      headers: { ...headers, 'Content-Type': 'multipart/form-data' }
+      headers, timeout: 180000,
+      onUploadProgress: event => { if (event.total) uploadPercent.value = Math.round(event.loaded / event.total * 100) }
     })
 
     // 2. 更新章节（如果内容没有重新上传，且有变动）
@@ -323,6 +353,7 @@ async function save() {
 }
 
 function close() {
+  precheckVersion += 1; precheckController?.abort()
   emit('close')
 }
 </script>

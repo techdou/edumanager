@@ -66,6 +66,10 @@
       </label>
 
       <label class="check-row">
+        <input v-model="form.isPublic" type="checkbox" />
+        <span>公开访问（未登录也可阅读；关闭后按班级分类授权）</span>
+      </label>
+      <label class="check-row">
         <input v-model="form.isFeatured" type="checkbox" />
         <span>在首页知识库区域展示</span>
       </label>
@@ -80,6 +84,7 @@
 
     <section class="table-panel">
       <div v-if="loading" class="empty">正在加载知识文档...</div>
+      <div v-else-if="error && docs.length === 0" class="empty">{{ error }} <button @click="loadData">重试</button></div>
       <div v-else-if="docs.length === 0" class="empty">暂无飞书知识库文档</div>
       <div v-else class="doc-list">
         <article v-for="doc in docs" :key="doc.id" class="doc-row">
@@ -87,11 +92,12 @@
             <div class="doc-head">
               <span class="tag">{{ doc.category_name || '未分类' }}</span>
               <span class="tag type">{{ typeText(doc) }}</span>
+              <span class="tag">{{ doc.is_public ? '公开' : '班级授权' }}</span>
               <span v-if="doc.is_featured" class="tag featured">首页展示</span>
             </div>
             <h3>{{ doc.title }}</h3>
             <p>{{ doc.summary || '暂无简介' }}</p>
-            <a :href="doc.file_url || doc.url" target="_blank" rel="noopener noreferrer">
+            <a :href="doc.file_url || doc.url" @click.prevent="openDoc(doc)">
               {{ doc.file_name || doc.url }}
             </a>
           </div>
@@ -107,7 +113,8 @@
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
-import axios from 'axios'
+import axios from '../../lib/http'
+import { openDocument } from '../../lib/contentSession'
 
 const docs = ref([])
 const categories = ref([])
@@ -122,6 +129,7 @@ const form = reactive({
   summary: '',
   categoryId: '',
   isFeatured: true,
+  isPublic: false,
   mode: 'link',
   file: null,
   cover: null
@@ -139,7 +147,7 @@ async function loadData() {
   error.value = ''
   try {
     const [docRes, categoryRes] = await Promise.all([
-      axios.get('/api/knowledge'),
+      axios.get('/api/knowledge', { headers: headers(), authRole: 'admin' }),
       axios.get('/api/categories')
     ])
     docs.value = docRes.data
@@ -159,6 +167,7 @@ function resetForm() {
     summary: '',
     categoryId: '',
     isFeatured: true,
+  isPublic: false,
     mode: 'link',
     file: null,
     cover: null
@@ -174,6 +183,7 @@ function editDoc(doc) {
     summary: doc.summary || '',
     categoryId: doc.category_id || '',
     isFeatured: Boolean(doc.is_featured),
+    isPublic: Boolean(doc.is_public),
     mode: doc.file_type ? 'file' : 'link',
     file: null,
     cover: null
@@ -203,6 +213,7 @@ function appendDocFields(formData) {
   formData.append('categoryId', form.categoryId ? String(form.categoryId) : '')
   formData.append('source', 'feishu')
   formData.append('isFeatured', form.isFeatured ? '1' : '0')
+  formData.append('isPublic', form.isPublic ? '1' : '0')
   if (form.cover) formData.append('cover', form.cover)
 }
 
@@ -242,6 +253,10 @@ async function deleteDoc(doc) {
   } catch (e) {
     error.value = e.response?.data?.error || '删除失败'
   }
+}
+
+async function openDoc(doc) {
+  try { await openDocument(doc, true) } catch { error.value = '文档打开失败，请重试。' }
 }
 
 function typeText(doc) {

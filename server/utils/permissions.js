@@ -22,16 +22,25 @@ function getAccessibleCategories(studentId) {
 function canAccessLecture(studentId, lecture) {
   if (lecture.is_public === 1) return true;
   if (!studentId) return false;
+  if (isAdminStudent(studentId)) return true;
   const accessibleCategories = getAccessibleCategories(studentId);
   return accessibleCategories.includes(lecture.category_id);
 }
 
 function filterAccessibleLectures(studentId, lectures) {
   if (!studentId) return lectures.filter(l => l.is_public === 1);
+  if (isAdminStudent(studentId)) return lectures;
   const accessibleCategories = getAccessibleCategories(studentId);
   return lectures.filter(l =>
     l.is_public === 1 || accessibleCategories.includes(l.category_id)
   );
 }
 
-module.exports = { getStudentGroups, getAccessibleCategories, canAccessLecture, filterAccessibleLectures };
+function isAdminStudent(studentId) {
+  return !!studentId && !!db.get(`
+    SELECT s.id FROM students s JOIN admins a ON a.username = s.username
+    WHERE s.id = ? AND s.status = 'active'
+  `, [studentId]);
+}
+
+module.exports = { getStudentGroups, getAccessibleCategories, canAccessLecture, filterAccessibleLectures, isAdminStudent };

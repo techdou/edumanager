@@ -60,6 +60,7 @@
 
 <script setup>
 import { ref } from 'vue'
+import { setAuth } from '../lib/auth'
 
 const props = defineProps({ visible: Boolean })
 const emit = defineEmits(['update:visible', 'success'])
@@ -90,10 +91,7 @@ async function handleSubmit() {
       error.value = data.error || '操作失败'
       return
     }
-    // Save token
-    localStorage.setItem('token', data.token)
-    localStorage.setItem('studentUsername', data.username)
-    if (data.role === 'admin') localStorage.setItem('adminToken', data.token)
+    setAuth(data)
     close()
     emit('success')
   } catch {

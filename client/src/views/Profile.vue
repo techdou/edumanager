@@ -26,7 +26,8 @@
 
         <div v-if="loading" style="padding: 40px; text-align: center; color: var(--color-ink-tertiary);">加载中...</div>
 
-        <template v-else-if="profile">
+        <div v-if="loadError" role="alert" class="alert-banner error">{{ loadError }} <button @click="loadProfile" :disabled="loading">重试</button></div>
+        <template v-if="profile && !loading">
           <div v-if="message" :class="['alert-banner', messageType]">
             <svg v-if="messageType === 'success'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
             <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
@@ -111,22 +112,20 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import axios from 'axios'
+import axios from '../lib/http'
+import { logoutSession } from '../lib/contentSession'
 
 const router = useRouter()
 const profile = ref(null)
 const loading = ref(true)
+const loadError = ref('')
 const editing = ref(false)
 const saving = ref(false)
 const message = ref('')
 const messageType = ref('')
 const editForm = ref({ real_name: '', email: '' })
 
-function logout() {
-  localStorage.removeItem('token')
-  localStorage.removeItem('studentUsername')
-  router.push('/')
-}
+async function logout() { try { await logoutSession() } finally { router.push('/') } }
 
 function formatDate(value) {
   if (!value) return '-'
@@ -170,20 +169,13 @@ async function saveProfile() {
   }
 }
 
-onMounted(async () => {
-  const token = localStorage.getItem('token')
-  if (!token) { router.push('/'); return }
-  try {
-    const res = await axios.get('/api/auth/student/profile', {
-      headers: { Authorization: `Bearer ${token}` }
-    })
-    profile.value = res.data
-  } catch (e) {
-    if (e.response?.status === 401) router.push('/')
-  } finally {
-    loading.value = false
-  }
-})
+async function loadProfile() {
+  loading.value = true; loadError.value = ''
+  try { profile.value = (await axios.get('/api/auth/student/profile')).data }
+  catch { loadError.value = '个人信息加载失败，请重试。' }
+  finally { loading.value = false }
+}
+onMounted(loadProfile)
 </script>
 
 <style scoped>

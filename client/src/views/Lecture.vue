@@ -9,13 +9,15 @@
           <span>返回列表</span>
         </router-link>
         <h1 class="lecture-title">{{ lecture?.title || '讲义浏览' }}</h1>
+        <button v-if="currentPath && !iframeError" class="completion-button" :disabled="savingCompletion" @click="markComplete">{{ completed ? '已完成 · 取消标记' : '标记本章已完成' }}</button>
         <div v-if="currentPath && !nativeLayout" class="read-progress">
-          <span>{{ readProgress }}%</span>
+          <span>阅读位置 {{ readProgress }}%</span>
           <div><i :style="{ width: `${readProgress}%` }"></i></div>
         </div>
       </div>
     </header>
 
+    <div v-if="syncError" role="status" class="sync-error">{{ syncError }} <button @click="retryProgress">重试同步</button></div>
     <div class="lecture-body">
       <!-- Floating toggle (visible when sidebar collapsed on PC) -->
       <button
@@ -123,28 +125,13 @@
           <div class="skeleton" style="height: 200px"></div>
         </div>
         
-        <iframe 
-          v-else-if="currentSrc"
-          ref="viewerFrame"
-          :src="currentSrc"
-          class="viewer-frame"
-          sandbox="allow-scripts allow-same-origin"
-          @load="onIframeLoad"
-          @error="iframeError = true"
-        />
-        
-        <div v-else-if="iframeError" class="empty-state">
-          <div class="empty-state-icon" aria-hidden="true">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-              <path d="M21 15V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9"/>
-              <path d="M3 15h5l2 3h4l2-3h5"/>
-              <path d="M21 15v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3"/>
-            </svg>
-          </div>
-          <h3 class="empty-state-title">讲义内容暂未上传</h3>
-          <p class="empty-state-desc">该章节的内容尚未准备好，请联系管理员上传讲义文件</p>
+        <div v-else-if="iframeError" class="empty-state" role="alert">
+          <h3 class="empty-state-title">讲义暂时无法打开</h3>
+          <p class="empty-state-desc">{{ loadError || '请检查连接后重试，或联系管理员。' }}</p>
+          <button class="completion-button" @click="loadLecture">重新加载讲义</button>
+          <router-link v-if="!getToken()" :to="loginLocation()">登录后重试</router-link>
         </div>
-        
+        <iframe v-else-if="currentSrc" :key="frameKey" ref="viewerFrame" :src="currentSrc" class="viewer-frame" title="讲义内容" sandbox="allow-scripts allow-same-site-none-cookies" @load="onIframeLoad" @error="iframeError = true" />
         <div v-else class="empty-state">
           <div class="empty-state-icon" aria-hidden="true">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
@@ -163,8 +150,10 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import api, { showToast } from '../lib/http'
-
+import api from '../lib/http'
+import { ensureContentSession } from '../lib/contentSession'
+import { getToken, authHeaders, loginLocation } from '../lib/auth'
+import { cachedProgress, loadProgress, cacheProgress, saveProgress } from '../lib/progress'
 const route = useRoute()
 const slug = computed(() => route.params.slug)
 const currentChapter = computed(() => route.params.chapter || chapters.value[0]?.slug || '')
@@ -173,271 +162,158 @@ const isMobile = ref(window.innerWidth <= 768)
 const loading = ref(true)
 const viewerFrame = ref(null)
 const iframeError = ref(false)
-
+const loadError = ref('')
 const lecture = ref(null)
 const chapters = ref([])
 const toc = ref(null)
 const activeAnchor = ref('')
 const readProgress = ref(0)
-const showToc = computed(() => !!toc.value && toc.value.modules.length > 0)
+const completed = ref(false)
+const savingCompletion = ref(false)
+const syncError = ref('')
+const ready = ref(false)
+const frameKey = ref(0)
+const showToc = computed(() => !!toc.value?.modules?.length)
 const nativeLayout = computed(() => lecture.value?.layout_mode === 'native')
-const recentKeyPrefix = 'edumanager:recentLectures'
+const chapter = computed(() => chapters.value.find(item => item.slug === currentChapter.value))
+const currentPath = computed(() => chapter.value?.path || '')
+const currentSrc = computed(() => ready.value && chapter.value ? `/lectures/${chapter.value.path}/${chapter.value.entry_file || 'index.html'}` : '')
+let requestVersion = 0
+let controller = null
+let saveTimer = null
+let sessionTimer = null
+let frameTimer = null
+let pendingProgress = null
+let saveChain = Promise.resolve()
 
-function currentUserKey() {
-  const token = localStorage.getItem('token')
-  if (!token) return 'guest'
-  try {
-    return JSON.parse(atob(token.split('.')[1])).id || localStorage.getItem('studentUsername') || 'student'
-  } catch {
-    return localStorage.getItem('studentUsername') || 'student'
+function syncViewportMode() { isMobile.value = window.innerWidth <= 768; if (isMobile.value) sidebarCollapsed.value = true }
+function snapshot() {
+  if (!lecture.value || !chapter.value) return null
+  return { lecture_id: lecture.value.id, chapter_id: chapter.value.id, lectureSlug: slug.value, chapterSlug: chapter.value.slug, lectureTitle: lecture.value.title, chapterTitle: chapter.value.title, progress: readProgress.value, completed: completed.value, updatedAt: Date.now() }
+}
+function persist(item, complete) {
+  if (!item || !getToken()) return Promise.resolve()
+  const token = getToken()
+  // Serialize writes so an older slow save cannot overwrite a newer reading position.
+  saveChain = saveChain.catch(() => {}).then(() => saveProgress(item, complete, token))
+  return saveChain
+}
+function scheduleSave() {
+  const item = snapshot()
+  if (!item || !getToken()) return
+  cacheProgress(item)
+  pendingProgress = item
+  clearTimeout(saveTimer)
+  saveTimer = setTimeout(flushProgress, 1200)
+}
+function flushProgress() {
+  clearTimeout(saveTimer)
+  const item = pendingProgress
+  pendingProgress = null
+  if (!item) return
+  const version = requestVersion
+  persist(item).then(() => { if (version === requestVersion) syncError.value = '' }).catch(() => {
+    if (version === requestVersion) syncError.value = '进度尚未同步，已保存在此设备。'
+  })
+}
+async function retryProgress() {
+  const item = snapshot()
+  try { await persist(item, completed.value); syncError.value = '' }
+  catch { syncError.value = '进度同步失败，请稍后重试。' }
+}
+async function markComplete() {
+  if (!getToken()) { window.location.assign(loginLocation()); return }
+  if (savingCompletion.value) return
+  const version = requestVersion
+  const next = !completed.value
+  const item = { ...snapshot(), completed: next }
+  savingCompletion.value = true
+  flushProgress()
+  try { await persist(item, next); if (version === requestVersion) { completed.value = next; syncError.value = '' } }
+  catch { if (version === requestVersion) syncError.value = '完成状态未同步，请重试。' }
+  finally { if (version === requestVersion) savingCompletion.value = false }
+}
+function postToFrame(message) { viewerFrame.value?.contentWindow?.postMessage(message, '*') }
+function restoreFrame() { postToFrame({ type: 'restore-progress', progress: readProgress.value }) }
+function handleTocMessage(event) {
+  if (event.source !== viewerFrame.value?.contentWindow) return
+  if (event.data?.type === 'reading-ready') { clearTimeout(frameTimer); restoreFrame() }
+  if (event.data?.type === 'toc-active') activeAnchor.value = String(event.data.anchor || '')
+  if (event.data?.type === 'reading-progress') {
+    readProgress.value = Math.max(0, Math.min(100, Math.round(Number(event.data.progress) || 0)))
+    scheduleSave()
   }
 }
-
-function recentKey() {
-  return `${recentKeyPrefix}:${currentUserKey()}`
-}
-
-function authHeaders() {
-  const token = localStorage.getItem('token')
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
-
-function accessQuery() {
-  const token = localStorage.getItem('token')
-  return token ? `?access_token=${encodeURIComponent(token)}` : ''
-}
-
-const currentPath = computed(() => {
-  if (!lecture.value || !currentChapter.value) return null
-  const chapter = chapters.value.find(item => item.slug === currentChapter.value)
-  return chapter?.path || null
-})
-
-const currentSrc = computed(() => {
-  const chapter = chapters.value.find(item => item.slug === currentChapter.value)
-  if (!chapter?.path) return ''
-  return `/lectures/${chapter.path}/${chapter.entry_file || 'index.html'}${accessQuery()}`
-})
-
-function syncViewportMode() {
-  isMobile.value = window.innerWidth <= 768
-  if (isMobile.value) sidebarCollapsed.value = true
-}
-
-function handleTocMessage(e) {
-  if (e.data?.type === 'toc-active') {
-    activeAnchor.value = e.data.anchor
-  }
-  if (e.data?.type === 'reading-progress') {
-    readProgress.value = Math.max(0, Math.min(100, Math.round(Number(e.data.progress) || 0)))
-    saveRecentLecture()
-  }
-}
-
-function currentChapterMeta() {
-  return chapters.value.find(item => item.slug === currentChapter.value)
-}
-
-function saveRecentLecture() {
-  if (!lecture.value || !currentChapter.value) return
-  const chapter = currentChapterMeta()
-  const item = {
-    lectureSlug: slug.value,
-    chapterSlug: currentChapter.value,
-    lectureTitle: lecture.value.title,
-    chapterTitle: chapter?.title || lecture.value.title,
-    progress: readProgress.value,
-    updatedAt: Date.now()
-  }
-  try {
-    const existing = JSON.parse(localStorage.getItem(recentKey()) || '[]')
-    const next = [
-      item,
-      ...existing.filter(entry => `${entry.lectureSlug}/${entry.chapterSlug}` !== `${item.lectureSlug}/${item.chapterSlug}`)
-    ].slice(0, 6)
-    localStorage.setItem(recentKey(), JSON.stringify(next))
-  } catch {
-    localStorage.setItem(recentKey(), JSON.stringify([item]))
-  }
-}
-
-function restoreSavedProgress() {
-  if (!lecture.value || !currentChapter.value) return
-  try {
-    const items = JSON.parse(
-      localStorage.getItem(recentKey())
-      || localStorage.getItem(recentKeyPrefix)
-      || '[]'
-    )
-    const item = items.find(entry =>
-      entry.lectureSlug === slug.value && entry.chapterSlug === currentChapter.value
-    )
-    readProgress.value = Math.max(0, Math.min(100, Math.round(Number(item?.progress) || 0)))
-  } catch {
-    readProgress.value = 0
-  }
-}
-
-function isModuleActive(module) {
-  if (activeAnchor.value === module.anchor) return true
-  return module.sections?.some(section => section.anchor === activeAnchor.value)
-}
+function onIframeLoad() { restoreFrame() }
+function scrollToAnchor(anchor) { postToFrame({ type: 'scroll-to-anchor', anchor }); if (isMobile.value) sidebarCollapsed.value = true }
+function isModuleActive(module) { return activeAnchor.value === module.anchor || module.sections?.some(section => section.anchor === activeAnchor.value) }
 
 async function loadLecture() {
-  loading.value = true
-  toc.value = null
-  activeAnchor.value = ''
-  readProgress.value = 0
-  iframeError.value = false
-
+  flushProgress()
+  controller?.abort()
+  controller = new AbortController()
+  const signal = controller.signal
+  const version = ++requestVersion
+  const requestedSlug = String(route.params.slug || '')
+  const requestedChapter = String(route.params.chapter || '')
+  ready.value = false; loading.value = true; iframeError.value = false; loadError.value = ''; syncError.value = ''; toc.value = null
+  activeAnchor.value = ''; readProgress.value = 0; completed.value = false; savingCompletion.value = false
+  clearTimeout(frameTimer)
   try {
-    const res = await api.get('/api/lectures', { headers: authHeaders() })
-    const list = Array.isArray(res.data) ? res.data : []
-    lecture.value = list.find(l => l && l.slug === slug.value) || null
+    const { data } = await api.get('/api/lectures', { signal })
+    if (version !== requestVersion) return
+    lecture.value = (Array.isArray(data) ? data : []).find(item => item.slug === requestedSlug) || null
     chapters.value = lecture.value?.chapters || []
-    restoreSavedProgress()
-
-    // 讲义不存在或无权限：给出明确提示而非空白
-    if (!lecture.value) {
-      showToast('讲义不存在或无权限访问', 'warn')
-      loading.value = false
-      return
+    if (!lecture.value || !chapters.value.length || (requestedChapter && !chapters.value.some(item => item.slug === requestedChapter))) throw new Error('讲义或章节不存在，或当前账号没有访问权限。')
+    let rows
+    try { rows = await loadProgress() }
+    catch { rows = cachedProgress(); if (version === requestVersion) syncError.value = '学习记录暂未同步，使用此设备缓存。' }
+    if (version !== requestVersion) return
+    const saved = rows.find(item => Number(item.chapter_id) === chapter.value.id || (item.lectureSlug === requestedSlug && item.chapterSlug === chapter.value.slug))
+    readProgress.value = Number(saved?.progress) || 0
+    completed.value = Boolean(saved?.completed)
+    await ensureContentSession()
+    if (version !== requestVersion) return
+    const entryUrl = `/lectures/${chapter.value.path}/${chapter.value.entry_file || 'index.html'}`
+    await api.head(entryUrl, { signal, silent: true })
+    if (version !== requestVersion) return
+    ready.value = true; frameKey.value += 1
+    frameTimer = setTimeout(() => { if (version === requestVersion) { iframeError.value = true; loadError.value = '讲义加载超时，请重新打开。' } }, 30000)
+    if (!nativeLayout.value) {
+      api.get(`/api/lectures/toc/${encodeURIComponent(requestedSlug)}/${encodeURIComponent(chapter.value.slug)}`, { signal, silent: true }).then(({ data }) => {
+        if (version === requestVersion) toc.value = data?.modules ? data : null
+      }).catch(() => {})
     }
-
-    // 尝试加载当前章节的 TOC（失败不影响主流程）
-    if (currentPath.value && !nativeLayout.value) {
-      try {
-        const tocRes = await api.get(`/api/lectures/toc/${slug.value}/${currentChapter.value}`, { headers: authHeaders() })
-        toc.value = tocRes.data && tocRes.data.modules ? tocRes.data : null
-      } catch {
-        toc.value = null
-      }
-    }
-  } catch (err) {
-    // 网络/服务错误已由 http 拦截器提示；此处仅保证 UI 不崩
-    lecture.value = null
-    chapters.value = []
-  } finally {
-    loading.value = false
-  }
+  } catch (error) {
+    if (version !== requestVersion || signal.aborted) return
+    iframeError.value = true
+    loadError.value = error.response?.status === 403 ? '当前账号没有访问该讲义的权限。' : error.response?.status === 404 ? '讲义文件不存在，请联系管理员。' : error.message === 'Network Error' ? '网络连接失败，请重试。' : error.response?.data?.error || error.message || '讲义加载失败，请重试。'
+  } finally { if (version === requestVersion) loading.value = false }
 }
-
-function onIframeLoad() {
-  // 检测 iframe 是否加载了 404 或非预期内容
-  if (viewerFrame.value) {
-    try {
-      const doc = viewerFrame.value.contentDocument
-      // 如果内容是 SPA index.html（包含 #app），说明讲义文件不存在
-      if (doc && doc.querySelector('#app') && !doc.querySelector('.lecture-content, .markdown-body, article, main')) {
-        iframeError.value = true
-        return
-      }
-    } catch {
-      // cross-origin，无法检测，不处理
-    }
-  }
-  
-  if (!viewerFrame.value) return
-  
-  const iframe = viewerFrame.value
-  try {
-    const doc = iframe.contentDocument
-    if (!doc) return
-    const savedProgress = readProgress.value
-    
-    // Inject scroll tracker into iframe
-    const script = doc.createElement('script')
-    script.textContent = `
-      (function() {
-        let ticking = false;
-        const headings = document.querySelectorAll('h1[id], h2[id], h3[id], h4[id]');
-        const initialProgress = ${JSON.stringify(savedProgress)};
-        
-        function sendReadingState() {
-          const scrollTop = window.scrollY || document.documentElement.scrollTop;
-          const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
-          let active = '';
-          
-          for (let i = headings.length - 1; i >= 0; i--) {
-            const el = headings[i];
-            const rect = el.getBoundingClientRect();
-            if (rect.top <= 120) {
-              active = '#' + el.id;
-              break;
-            }
-          }
-          
-          window.parent.postMessage({ type: 'toc-active', anchor: active }, '*');
-          window.parent.postMessage({ type: 'reading-progress', progress: Math.min(100, (scrollTop / maxScroll) * 100) }, '*');
-        }
-
-        function restoreProgress() {
-          if (!initialProgress || initialProgress <= 0) {
-            sendReadingState();
-            return;
-          }
-          const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
-          window.scrollTo(0, maxScroll * Math.min(100, initialProgress) / 100);
-          setTimeout(sendReadingState, 80);
-        }
-        
-        window.addEventListener('scroll', function() {
-          if (!ticking) {
-            ticking = true;
-            requestAnimationFrame(function() {
-              sendReadingState();
-              ticking = false;
-            });
-          }
-        });
-        
-        // Restore saved progress after layout settles.
-        setTimeout(restoreProgress, 120);
-      })();
-    `
-    doc.head.appendChild(script)
-  } catch (e) {
-    // Cross-origin or sandbox restriction
-  }
+function saveBeforeLeaving() {
+  const item = pendingProgress
+  if (!item || !getToken()) return
+  cacheProgress(item)
+  fetch(`/api/progress/${item.lecture_id}/${item.chapter_id}`, { method: 'PUT', headers: { ...authHeaders(), 'Content-Type': 'application/json' }, body: JSON.stringify({ position: item.progress }), keepalive: true }).catch(() => {})
 }
-
-function scrollToAnchor(anchor) {
-  if (!viewerFrame.value) return
-  try {
-    const doc = viewerFrame.value.contentDocument
-    if (!doc) return
-    const el = doc.querySelector(anchor)
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      activeAnchor.value = anchor
-      if (isMobile.value) sidebarCollapsed.value = true
-    }
-  } catch {
-    // fallback: set iframe src with hash
-    viewerFrame.value.src = `${currentSrc.value}${anchor}`
-    if (isMobile.value) sidebarCollapsed.value = true
-  }
-}
-
-// Listen for scroll messages from iframe
 onMounted(() => {
-  syncViewportMode()
-  sidebarCollapsed.value = isMobile.value
+  syncViewportMode(); sidebarCollapsed.value = isMobile.value
   window.addEventListener('resize', syncViewportMode)
   window.addEventListener('message', handleTocMessage)
+  window.addEventListener('pagehide', saveBeforeLeaving)
+  sessionTimer = setInterval(() => ensureContentSession().catch(() => { syncError.value = '内容会话刷新失败，请检查网络。' }), 20 * 60 * 1000)
   loadLecture()
 })
-
 onUnmounted(() => {
-  window.removeEventListener('resize', syncViewportMode)
-  window.removeEventListener('message', handleTocMessage)
+  flushProgress(); requestVersion += 1; controller?.abort(); clearInterval(sessionTimer); clearTimeout(frameTimer)
+  window.removeEventListener('resize', syncViewportMode); window.removeEventListener('message', handleTocMessage); window.removeEventListener('pagehide', saveBeforeLeaving)
 })
-
-watch(slug, () => loadLecture())
-watch(currentChapter, () => loadLecture())
+watch(() => [route.params.slug, route.params.chapter], loadLecture)
 </script>
 
 <style scoped>
+.completion-button { padding: 8px 12px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); color: var(--color-brand); cursor: pointer; font: inherit; }
+.sync-error { padding: 10px 24px; background: #fff4ed; }
 .lecture-page {
   min-height: 100vh;
   display: flex;

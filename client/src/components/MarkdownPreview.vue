@@ -7,8 +7,8 @@
 </template>
 
 <script setup>
-import { nextTick, onMounted, ref, watch } from 'vue'
-import axios from 'axios'
+import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import axios from '../lib/http'
 import MarkdownIt from 'markdown-it'
 import mermaid from 'mermaid'
 
@@ -46,21 +46,26 @@ mermaid.initialize({
   theme: 'default'
 })
 
+let requestVersion = 0
 async function loadMarkdown() {
+  const version = ++requestVersion
   loading.value = true
   error.value = ''
   try {
     const res = await axios.get(`/api/knowledge/${props.docId}/markdown`)
+    if (version !== requestVersion) return
     html.value = md.render(res.data.content || '')
     loading.value = false
     await nextTick()
     await mermaid.run({ nodes: container.value?.querySelectorAll('.mermaid') || [] })
   } catch (e) {
+    if (version !== requestVersion) return
     error.value = e.response?.data?.error || 'Markdown 渲染失败'
     loading.value = false
   }
 }
 
+onUnmounted(() => { requestVersion += 1 })
 onMounted(loadMarkdown)
 watch(() => props.docId, loadMarkdown)
 </script>

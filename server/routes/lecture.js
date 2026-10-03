@@ -1,11 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const { execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const AdmZip = require('adm-zip');
-const jwt = require('jsonwebtoken');
 const db = require('../db');
 const logger = require('../logger');
 const config = require('../config');
@@ -14,18 +11,19 @@ const config = require('../config');
 const adminAuth = require('../middleware/adminAuth');
 const { studentAuth, optionalStudentAuth } = require('../middleware/studentAuth');
 
-const JWT_SECRET = config.jwtSecret;
 const { filterAccessibleLectures, canAccessLecture } = require('../utils/permissions');
 const { extractTOC } = require('../utils/tocExtractor');
-const { atomicWriteDir } = require('../utils/fs');
+const { atomicWriteDir, assertWithin } = require('../utils/fs');
+const { extractLectureContent, inspectUpload, validateUpload } = require('../utils/upload');
 
 // ZIP 上传配置
 const upload = multer({
-  dest: path.join(__dirname, '../uploads/'),
+  dest: config.uploadsDir,
   limits: { fileSize: 200 * 1024 * 1024 } // 200MB
 });
 
 const lecturesRoot = config.lecturesDir;
+const { resolveContentFile } = require('../utils/contentFiles');
 const coverRoot = config.lectureCoverDir;
 fs.mkdirSync(config.uploadsDir, { recursive: true });
 fs.mkdirSync(lecturesRoot, { recursive: true });
@@ -37,16 +35,16 @@ function isValidSlug(slug) {
 
 function safeLecturePath(slug) {
   const target = path.resolve(lecturesRoot, slug);
-  if (!target.startsWith(`${lecturesRoot}${path.sep}`)) {
+  if (!target.startsWith(`${path.resolve(lecturesRoot)}${path.sep}`)) {
     throw new Error('Invalid lecture path');
   }
   return target;
 }
 
 function cleanupUpload(file) {
-  if (file?.path && fs.existsSync(file.path)) {
-    fs.unlinkSync(file.path);
-  }
+  if (!file?.path) return;
+  try { fs.rmSync(file.path, { force: true }); }
+  catch (err) { logger.warn({ err: String(err) }, 'lecture_upload_cleanup_error'); }
 }
 
 function cleanupFiles(files = []) {
@@ -64,13 +62,21 @@ function saveCover(file) {
   if (!file) return null;
   const ext = path.extname(file.originalname).toLowerCase();
   const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
-  fs.renameSync(file.path, path.join(coverRoot, fileName));
+  const target = path.join(coverRoot, fileName);
+  try {
+    fs.renameSync(file.path, target);
+  } catch (err) {
+    if (err.code !== 'EXDEV') throw err;
+    // DATA_DIR may live on a different volume from the incoming upload directory.
+    try { fs.copyFileSync(file.path, target, fs.constants.COPYFILE_EXCL); }
+    catch (copyError) { fs.rmSync(target, { force: true }); throw copyError; }
+  }
   return fileName;
 }
 
 function safeCoverPath(relativePath) {
   const target = path.resolve(coverRoot, relativePath || '');
-  if (!target.startsWith(`${coverRoot}${path.sep}`)) {
+  if (!target.startsWith(`${path.resolve(coverRoot)}${path.sep}`)) {
     throw new Error('Invalid cover path');
   }
   return target;
@@ -85,10 +91,6 @@ function getPublicLecture(lecture) {
 
 function isHtmlFile(name) {
   return /\.(html?|xhtml)$/i.test(name);
-}
-
-function normalizeZipPath(value) {
-  return String(value || '').replace(/\\/g, '/').replace(/^\/+/, '');
 }
 
 function htmlTitle(filePath, fallback) {
@@ -143,27 +145,6 @@ function chooseEntry(files) {
   return files.find(file => path.basename(file).toLowerCase() === 'index.html')
     || files.find(file => path.basename(file).toLowerCase() === 'index.htm')
     || files[0];
-}
-
-// 解压/拷贝讲义内容到临时目录（供 atomicWriteDir 调用）。
-// 成功返回 populated 的目录，失败抛错（由 atomicWriteDir 负责清理 tmp）
-function extractLectureContent(uploadFile, destDir) {
-  const isZip = uploadFile.originalname.toLowerCase().endsWith('.zip');
-  const isSingleHtml = isHtmlFile(uploadFile.originalname);
-  if (!isZip && !isSingleHtml) {
-    throw new Error('仅支持 ZIP 或 HTML 文件');
-  }
-  if (isSingleHtml) {
-    fs.renameSync(uploadFile.path, path.join(destDir, uploadFile.originalname));
-    return;
-  }
-  // 优先用 config 探测到的解压器，避免硬编码 unar/unzip
-  const cmd = config.unarchiver || 'unzip';
-  if (cmd === 'unar') {
-    execFileSync('unar', ['-o', destDir, uploadFile.path], { encoding: 'utf-8' });
-  } else {
-    execFileSync('unzip', ['-o', uploadFile.path, '-d', destDir], { encoding: 'utf-8' });
-  }
 }
 
 function buildChapterCandidates(root) {
@@ -226,97 +207,128 @@ function resolveContentRoot(root) {
   return nestedHtml.length > 0 ? onlyDir : root;
 }
 
-function inspectZip(filePath) {
-  const zip = new AdmZip(filePath);
-  const entries = zip.getEntries().filter(entry => !entry.entryName.startsWith('__MACOSX/'));
-  const htmlFiles = entries
-    .filter(entry => !entry.isDirectory && isHtmlFile(entry.entryName))
-    .map(entry => normalizeZipPath(entry.entryName));
-  const groups = new Map();
-  htmlFiles.forEach(file => {
-    const parts = file.split('/').filter(Boolean);
-    const key = parts.length > 1 ? parts[0] : '(根目录)';
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(file);
-  });
-
-  const chapters = [...groups.entries()].map(([name, files]) => ({
-    name,
-    preferredHtml: chooseEntry(files),
-    hasIndex: files.some(file => path.basename(file).toLowerCase() === 'index.html'),
-    htmlCount: files.length
-  }));
-  const missingIndex = chapters.filter(item => !item.hasIndex);
-
-  return {
-    entryCount: entries.length,
-    htmlCount: htmlFiles.length,
-    mode: chapters.length > 1 ? 'multi-chapter' : 'single-page',
-    rootHasIndex: htmlFiles.some(name => name.toLowerCase() === 'index.html'),
-    rootHtml: htmlFiles.filter(name => !name.includes('/')),
-    chapters,
-    missingIndex,
-    warnings: [
-      ...(htmlFiles.length === 0 ? ['未找到 HTML 文件'] : []),
-      ...(missingIndex.length > 0 ? [`${missingIndex.length} 个章节未使用 index.html，系统会保留原文件名并自动指向可用 HTML`] : [])
-    ]
+// Upload mutations are serialized within this server process. Reads remain available
+// while a ZIP is inspected; publication and the DB transaction contain no awaits.
+let mutationQueue = Promise.resolve();
+function serializeMutation(handler) {
+  return (req, res, next) => {
+    const task = mutationQueue.then(() => handler(req, res));
+    mutationQueue = task.catch(() => {});
+    task.catch(next);
   };
 }
 
+const versionRoot = path.join(config.dataDir, 'lecture-versions');
+fs.mkdirSync(versionRoot, { recursive: true });
+
+function versionFile(id) {
+  if (!Number.isSafeInteger(Number(id)) || Number(id) <= 0) throw new Error('Invalid lecture id');
+  return path.join(versionRoot, `${Number(id)}.json`);
+}
+
+function versionContent(version) {
+  if (!version?.content || !/^[a-z0-9-]+$/i.test(version.content)) throw new Error('历史版本目录无效');
+  return assertWithin(path.join(lecturesRoot, '.history'), path.join(lecturesRoot, '.history', version.content));
+}
+
+function readVersion(id) {
+  const filePath = versionFile(id);
+  if (!fs.existsSync(filePath)) return null;
+  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+}
+
+function writeVersion(id, version) {
+  const filePath = versionFile(id);
+  if (!version) {
+    fs.rmSync(filePath, { force: true });
+    return;
+  }
+  const temporary = `${filePath}.tmp`;
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(version), { mode: 0o600 });
+    fs.renameSync(temporary, filePath);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+}
+
+function commitVersion(id, version, commit) {
+  const previous = readVersion(id);
+  writeVersion(id, version);
+  try { return commit(); }
+  catch (err) {
+    try { writeVersion(id, previous); }
+    catch (rollbackError) { err.message += `；历史记录回滚失败: ${rollbackError.message}`; }
+    throw err;
+  }
+}
+
+function snapshotVersion(lecture, chapters, contentDir) {
+  if (!contentDir) return null;
+  return {
+    schema: 1,
+    created_at: new Date().toISOString(),
+    content: path.basename(contentDir),
+    lecture: { title: lecture.title, zip_name: lecture.zip_name, cover_path: lecture.cover_path, layout_mode: lecture.layout_mode },
+    chapters: chapters.map(chapter => ({
+      title: chapter.title,
+      slug: chapter.slug,
+      // Keep paths relative so the version survives slug changes and backup restore.
+      path: chapter.path === lecture.slug ? '' : chapter.path.slice(lecture.slug.length + 1),
+      entry_file: chapter.entry_file || 'index.html',
+      order_index: chapter.order_index
+    }))
+  };
+}
+
+function cleanupVersion(version, keepCover) {
+  if (!version) return;
+  try { fs.rmSync(versionContent(version), { recursive: true, force: true }); }
+  catch (err) { logger.warn({ err: String(err) }, 'lecture_version_cleanup_error'); }
+  if (version.lecture?.cover_path && !keepCover.includes(version.lecture.cover_path)) {
+    cleanupSavedCover(version.lecture.cover_path);
+  }
+}
+
+function cleanupSavedCover(coverPath) {
+  if (!coverPath) return;
+  try { fs.rmSync(safeCoverPath(coverPath), { force: true }); }
+  catch (err) { logger.warn({ err: String(err) }, 'lecture_cover_cleanup_error'); }
+}
+
+function updatedLecture(id) {
+  const lecture = db.get(`
+    SELECT l.*, c.name as category_name FROM lectures l
+    LEFT JOIN categories c ON l.category_id = c.id WHERE l.id = ?
+  `, [id]);
+  lecture.chapters = db.query('SELECT * FROM chapters WHERE lecture_id = ? ORDER BY order_index', [id]);
+  return getPublicLecture(lecture);
+}
+
+function addChapters(lectureId, slug, title, candidates) {
+  const usedSlugs = new Set();
+  for (const [index, chapter] of candidates.entries()) {
+    const chapterSlug = candidates.length === 1 ? slug : chapterSlugFromName(chapter.slugSource, usedSlugs);
+    db.run(`INSERT INTO chapters (lecture_id, title, slug, path, entry_file, order_index)
+      VALUES (?, ?, ?, ?, ?, ?)`, [lectureId, chapter.title || title, chapterSlug,
+      chapter.path ? `${slug}/${chapter.path}` : slug, chapter.entryFile, index]);
+  }
+}
+
 router.post('/precheck', adminAuth, (req, res, next) => {
-  upload.single('file')(req, res, (err) => {
-    if (err) {
-      if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ error: '文件大小超过 200MB 限制' });
-      }
-      return res.status(400).json({ error: '文件上传失败: ' + err.message });
-    }
+  upload.single('file')(req, res, err => {
+    if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? '文件大小超过 200MB 限制' : '文件上传失败: ' + err.message });
     next();
   });
-}, (req, res) => {
+}, async (req, res) => {
   const file = req.file;
-  if (!file) {
-    return res.status(400).json({ error: '请选择 ZIP 或 HTML 文件' });
-  }
-  if (isHtmlFile(file.originalname)) {
-    const result = {
-      entryCount: 1,
-      htmlCount: 1,
-      mode: 'single-page',
-      rootHasIndex: path.basename(file.originalname).toLowerCase() === 'index.html',
-      rootHtml: [file.originalname],
-      chapters: [{
-        name: path.parse(file.originalname).name,
-        preferredHtml: file.originalname,
-        hasIndex: path.basename(file.originalname).toLowerCase() === 'index.html',
-        htmlCount: 1
-      }],
-      missingIndex: path.basename(file.originalname).toLowerCase() === 'index.html' ? [] : [{
-        name: path.parse(file.originalname).name,
-        preferredHtml: file.originalname,
-        hasIndex: false,
-        htmlCount: 1
-      }],
-      warnings: path.basename(file.originalname).toLowerCase() === 'index.html'
-        ? []
-        : ['该 HTML 不是 index.html，系统会保留原文件名并自动作为入口']
-    };
-    cleanupUpload(file);
-    return res.json(result);
-  }
-  if (!file.originalname.toLowerCase().endsWith('.zip')) {
-    cleanupUpload(file);
-    return res.status(400).json({ error: '仅支持 ZIP 或 HTML 文件' });
-  }
-
+  if (!file) return res.status(400).json({ error: '请选择 ZIP 或 HTML 文件' });
   try {
-    const result = inspectZip(file.path);
-    cleanupUpload(file);
-    res.json(result);
+    res.json(await inspectUpload(file));
   } catch (err) {
-    console.error('ZIP 预检错误:', err);
+    res.status(400).json({ error: err.message || 'ZIP 文件无法读取，请确认文件未损坏' });
+  } finally {
     cleanupUpload(file);
-    res.status(400).json({ error: 'ZIP 文件无法读取，请确认文件未损坏' });
   }
 });
 
@@ -342,18 +354,6 @@ function fetchLectureList() {
 router.get('/', optionalStudentAuth, (req, res) => {
   const allLectures = fetchLectureList();
 
-  // 检查是否是管理员请求
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  if (token) {
-    try {
-      const decoded = jwt.verify(token, JWT_SECRET);
-      if (decoded.role === 'admin') {
-        const admin = db.get('SELECT id FROM admins WHERE username = ?', [decoded.username]);
-        if (admin) return res.json(allLectures);
-      }
-    } catch {}
-  }
-
   res.json(filterAccessibleLectures(req.student?.id, allLectures));
 });
 
@@ -364,21 +364,13 @@ router.get('/my', studentAuth, (req, res) => {
   res.json(filtered);
 });
 
-// 上传 ZIP 讲义
+// Validate the staged content completely before publishing it and committing rows.
 router.post('/', adminAuth, (req, res, next) => {
-  upload.fields([
-    { name: 'file', maxCount: 1 },
-    { name: 'cover', maxCount: 1 }
-  ])(req, res, (err) => {
-    if (err) {
-      if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ error: '文件大小超过 200MB 限制' });
-      }
-      return res.status(400).json({ error: '文件上传失败: ' + err.message });
-    }
+  upload.fields([{ name: 'file', maxCount: 1 }, { name: 'cover', maxCount: 1 }])(req, res, err => {
+    if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? '文件大小超过 200MB 限制' : '文件上传失败: ' + err.message });
     next();
   });
-}, (req, res) => {
+}, serializeMutation(async (req, res) => {
   const title = String(req.body.title || '').trim();
   const slug = String(req.body.slug || '').trim();
   const categoryId = Number(req.body.categoryId);
@@ -386,120 +378,62 @@ router.post('/', adminAuth, (req, res, next) => {
   const isPublic = req.body.isPublic === '1' || req.body.isPublic === true ? 1 : 0;
   const file = req.files?.file?.[0];
   const cover = req.files?.cover?.[0];
-  
-  if (!file || !title || !slug || !categoryId) {
-    cleanupFiles([file, cover]);
-    return res.status(400).json({ error: '所有字段必填' });
-  }
-
-  if (!isValidSlug(slug)) {
-    cleanupFiles([file, cover]);
-    return res.status(400).json({ error: 'URL 标识只能包含英文、数字、下划线和短横线，长度 2-81 位' });
-  }
-
-  const category = db.get('SELECT id FROM categories WHERE id = ?', [categoryId]);
-  if (!category) {
-    cleanupFiles([file, cover]);
-    return res.status(400).json({ error: '分类不存在' });
-  }
-
-  const existing = db.get('SELECT id FROM lectures WHERE slug = ?', [slug]);
-  if (existing) {
-    cleanupFiles([file, cover]);
-    return res.status(400).json({ error: 'URL 标识已存在' });
-  }
-  
-  const isZip = file.originalname.toLowerCase().endsWith('.zip');
-  const isSingleHtml = isHtmlFile(file.originalname);
-  if (!isZip && !isSingleHtml) {
-    cleanupFiles([file, cover]);
-    return res.status(400).json({ error: '仅支持 ZIP 或 HTML 文件' });
-  }
-
-  if (!isAllowedCover(cover)) {
-    cleanupFiles([file, cover]);
-    return res.status(400).json({ error: '封面图仅支持 JPG、PNG、WebP' });
-  }
-  
   let coverPath = null;
+  let committed = false;
   try {
-    const zipName = path.parse(file.originalname).name;
+    if (!file || !title || !slug || !categoryId) return res.status(400).json({ error: '所有字段必填' });
+    if (!isValidSlug(slug)) return res.status(400).json({ error: 'URL 标识只能包含英文、数字、下划线和短横线，长度 2-81 位' });
+    if (!db.get('SELECT id FROM categories WHERE id = ?', [categoryId])) return res.status(400).json({ error: '分类不存在' });
+    if (db.get('SELECT id FROM lectures WHERE slug = ?', [slug])) return res.status(400).json({ error: 'URL 标识已存在' });
+    if (!isAllowedCover(cover)) return res.status(400).json({ error: '封面图仅支持 JPG、PNG、WebP' });
+    validateUpload(file);
     const extractPath = safeLecturePath(slug);
-    coverPath = saveCover(cover);
-
-    // 1) 原子写入讲义目录：先解压到 <slug>.tmp-xxx/，成功后再替换正式目录
-    //    这样解压失败/中断不会留下半成品目录
-    atomicWriteDir(lecturesRoot, extractPath, (tmpDir) => {
-      extractLectureContent(file, tmpDir);
-    });
-    // 临时上传文件已被 extractLectureContent 处理（rename 或解压），清理引用
-    cleanupUpload(file);
-
-    // 2) 解析章节候选（在事务外做，避免文件 IO 占用事务）
-    const chapterCandidates = buildChapterCandidates(extractPath);
-    if (chapterCandidates.length === 0) {
-      throw new Error('未找到可用 HTML 文件');
-    }
-
-    // 3) 事务：INSERT lectures + 多条 INSERT chapters 必须原子完成
-    //    中途失败自动回滚，不会留下"无章节的幽灵讲义"
-    const lectureId = db.transaction(() => {
-      const result = db.run(`
-        INSERT INTO lectures (title, slug, zip_name, category_id, cover_path, layout_mode, is_public) VALUES (?, ?, ?, ?, ?, ?, ?)
-      `, [title, slug, zipName, categoryId, coverPath, layoutMode, isPublic]);
-      const newLectureId = result.lastInsertRowid;
-
-      const usedSlugs = new Set();
-      chapterCandidates.forEach((chapter, index) => {
-        const chapterSlug = chapterCandidates.length === 1
-          ? slug
-          : chapterSlugFromName(chapter.slugSource, usedSlugs);
-        const chapterPath = chapter.path ? `${slug}/${chapter.path}` : slug;
-        db.run(`
-          INSERT INTO chapters (lecture_id, title, slug, path, entry_file, order_index) VALUES (?, ?, ?, ?, ?, ?)
-        `, [newLectureId, chapter.title || title, chapterSlug, chapterPath, chapter.entryFile, index]);
+    if (fs.existsSync(extractPath)) return res.status(409).json({ error: '讲义目录已存在，请先检查历史文件' });
+    const publication = await atomicWriteDir(lecturesRoot, extractPath, async stage => {
+      await extractLectureContent(file, stage);
+      const chapters = buildChapterCandidates(stage);
+      if (!chapters.length) throw new Error('未找到可用 HTML 文件');
+      return chapters;
+    }, { commit(candidates) {
+      coverPath = saveCover(cover);
+      const id = db.transaction(() => {
+        const result = db.run(`INSERT INTO lectures (title, slug, zip_name, category_id, cover_path, layout_mode, is_public)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`, [title, slug, path.parse(file.originalname).name, categoryId, coverPath, layoutMode, isPublic]);
+        addChapters(result.lastInsertRowid, slug, title, candidates);
+        return result.lastInsertRowid;
       });
-      return newLectureId;
-    });
-
-    const chapters = db.query('SELECT * FROM chapters WHERE lecture_id = ? ORDER BY order_index', [lectureId]);
-
-    res.json({
-      id: lectureId,
-      title,
-      slug,
-      layout_mode: layoutMode,
-      cover_url: coverPath ? `/api/lectures/${lectureId}/cover` : null,
-      chapters
-    });
-
+      committed = true;
+      return id;
+    }});
+    res.json(updatedLecture(publication.result));
   } catch (err) {
-    logger.error({ reqId: req.id, err: err && err.stack ? err.stack : String(err), slug }, 'lecture_upload_error');
+    logger.error({ reqId: req.id, err: String(err), slug }, 'lecture_upload_error');
+    res.status(/ZIP|HTML|文件名|上传文件/.test(err.message) ? 400 : 500).json({ error: err.message || '讲义处理失败' });
+  } finally {
     cleanupFiles([file, cover]);
-    if (coverPath) {
-      const savedCoverPath = safeCoverPath(coverPath);
-      if (fs.existsSync(savedCoverPath)) fs.unlinkSync(savedCoverPath);
-    }
-    const msg = err && err.message ? err.message : '上传失败';
-    res.status(500).json({ error: msg.includes('HTML') || msg.includes('ZIP') ? msg : '讲义处理失败' });
+    if (!committed && coverPath) cleanupSavedCover(coverPath);
   }
-});
+}));
 
-router.get('/:id/cover', (req, res) => {
-  const lecture = db.get('SELECT cover_path FROM lectures WHERE id = ?', [req.params.id]);
+router.get('/:id/cover', optionalStudentAuth, (req, res) => {
+  const lecture = db.get('SELECT id, category_id, is_public, cover_path FROM lectures WHERE id = ?', [req.params.id]);
   if (!lecture?.cover_path) {
     return res.status(404).send('Cover not found');
   }
 
-  const coverPath = safeCoverPath(lecture.cover_path);
-  if (!fs.existsSync(coverPath)) {
+  if (!canAccessLecture(req.student?.id, lecture)) {
+    return res.status(403).json({ error: '无权限访问该讲义' });
+  }
+  const coverPath = resolveContentFile(coverRoot, lecture.cover_path);
+  res.setHeader('Cache-Control', 'private, no-store');
+  if (!coverPath) {
     return res.status(404).send('Cover not found');
   }
   res.sendFile(coverPath);
 });
 
 // 删除讲义
-router.delete('/:id', adminAuth, (req, res) => {
+router.delete('/:id', adminAuth, serializeMutation((req, res) => {
   const { id } = req.params;
 
   const lecture = db.get('SELECT * FROM lectures WHERE id = ?', [id]);
@@ -534,10 +468,18 @@ router.delete('/:id', adminAuth, (req, res) => {
     }
   }
 
-  res.json({ success: true });
-});
+  try {
+    const version = readVersion(lecture.id);
+    cleanupVersion(version, []);
+    writeVersion(lecture.id, null);
+  } catch (err) {
+    logger.warn({ err: String(err), id }, 'lecture_version_cleanup_error');
+  }
 
-router.put('/:id/category', adminAuth, (req, res) => {
+  res.json({ success: true });
+}));
+
+router.put('/:id/category', adminAuth, serializeMutation((req, res) => {
   const { id } = req.params;
   const categoryId = Number(req.body.categoryId);
 
@@ -567,10 +509,10 @@ router.put('/:id/category', adminAuth, (req, res) => {
     FROM chapters WHERE lecture_id = ? ORDER BY order_index
   `, [id]);
   res.json(getPublicLecture(updated));
-});
+}));
 
 // 公开展示开关
-router.put('/:id/public', adminAuth, (req, res) => {
+router.put('/:id/public', adminAuth, serializeMutation((req, res) => {
   const { id } = req.params;
   const isPublic = req.body.is_public === 1 || req.body.is_public === true ? 1 : 0;
 
@@ -592,197 +534,159 @@ router.put('/:id/public', adminAuth, (req, res) => {
     FROM chapters WHERE lecture_id = ? ORDER BY order_index
   `, [id]);
   res.json(getPublicLecture(updated));
-});
+}));
 
-// 更新讲义基本信息（支持封面+内容重新上传）
+// Metadata-only changes and replacement uploads share the same mutation lock.
 router.put('/:id', adminAuth, (req, res, next) => {
-  upload.fields([
-    { name: 'file', maxCount: 1 },
-    { name: 'cover', maxCount: 1 }
-  ])(req, res, (err) => {
-    if (err) {
-      if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ error: '文件大小超过 200MB 限制' });
-      }
-      return res.status(400).json({ error: '文件上传失败: ' + err.message });
-    }
+  upload.fields([{ name: 'file', maxCount: 1 }, { name: 'cover', maxCount: 1 }])(req, res, err => {
+    if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? '文件大小超过 200MB 限制' : '文件上传失败: ' + err.message });
     next();
   });
-}, (req, res) => {
+}, serializeMutation(async (req, res) => {
   const { id } = req.params;
   const title = String(req.body.title || '').trim();
-  const slug = String(req.body.slug || '').trim();
+  const requestedSlug = String(req.body.slug || '').trim();
   const categoryId = req.body.categoryId ? Number(req.body.categoryId) : null;
   const layoutMode = req.body.layoutMode === 'native' ? 'native' : 'system';
   const isPublic = req.body.isPublic === '1' || req.body.isPublic === true ? 1 : 0;
   const cover = req.files?.cover?.[0];
-  const file = req.files?.file?.[0]; // 重新上传的内容文件
-
-  const lecture = db.get('SELECT * FROM lectures WHERE id = ?', [id]);
-  if (!lecture) {
-    cleanupUpload(cover);
-    cleanupUpload(file);
-    return res.status(404).json({ error: '讲义不存在' });
-  }
-
-  if (!title) {
-    cleanupUpload(cover);
-    cleanupUpload(file);
-    return res.status(400).json({ error: '标题不能为空' });
-  }
-
-  let oldSlug = lecture.slug;
-  let newSlug = null;
-  if (slug && slug !== oldSlug) {
-    if (!isValidSlug(slug)) {
-      cleanupUpload(cover);
-      cleanupUpload(file);
-      return res.status(400).json({ error: 'URL 标识只能包含英文、数字、下划线和短横线，长度 2-81 位' });
-    }
-    const existing = db.get('SELECT id FROM lectures WHERE slug = ? AND id != ?', [slug, id]);
-    if (existing) {
-      cleanupUpload(cover);
-      cleanupUpload(file);
-      return res.status(400).json({ error: 'URL 标识已存在' });
-    }
-    newSlug = slug;
-  }
-
-  if (categoryId) {
-    const category = db.get('SELECT id FROM categories WHERE id = ?', [categoryId]);
-    if (!category) {
-      cleanupUpload(cover);
-      cleanupUpload(file);
-      return res.status(400).json({ error: '分类不存在' });
-    }
-  }
-
-  if (!isAllowedCover(cover)) {
-    cleanupUpload(cover);
-    cleanupUpload(file);
-    return res.status(400).json({ error: '封面图仅支持 JPG、PNG、WebP' });
-  }
-
-  let coverPath = lecture.cover_path;
+  const file = req.files?.file?.[0];
+  let savedCover = null;
+  let committed = false;
   try {
-    // 处理新封面上传
-    if (cover) {
-      if (lecture.cover_path) {
-        const oldCoverPath = safeCoverPath(lecture.cover_path);
-        if (fs.existsSync(oldCoverPath)) fs.unlinkSync(oldCoverPath);
-      }
-      coverPath = saveCover(cover);
-    }
-
-    const activeSlug = newSlug || oldSlug;
-
-    // === 阶段 1：文件系统操作（事务外，因为涉及外部解压）===
-    // 内容重传：原子写入，避免半成品目录
-    let rebuiltChapters = null;
+    const lecture = db.get('SELECT * FROM lectures WHERE id = ?', [id]);
+    if (!lecture) return res.status(404).json({ error: '讲义不存在' });
+    if (!title) return res.status(400).json({ error: '标题不能为空' });
+    const slug = requestedSlug || lecture.slug;
+    if (!isValidSlug(slug)) return res.status(400).json({ error: 'URL 标识只能包含英文、数字、下划线和短横线，长度 2-81 位' });
+    if (db.get('SELECT id FROM lectures WHERE slug = ? AND id != ?', [slug, id])) return res.status(400).json({ error: 'URL 标识已存在' });
+    if (categoryId && !db.get('SELECT id FROM categories WHERE id = ?', [categoryId])) return res.status(400).json({ error: '分类不存在' });
+    if (!isAllowedCover(cover)) return res.status(400).json({ error: '封面图仅支持 JPG、PNG、WebP' });
+    if (file) validateUpload(file);
+    const oldPath = safeLecturePath(lecture.slug);
+    const newPath = safeLecturePath(slug);
+    if (oldPath !== newPath && fs.existsSync(newPath)) return res.status(409).json({ error: '目标讲义目录已存在' });
+    const oldChapters = db.query('SELECT * FROM chapters WHERE lecture_id = ? ORDER BY order_index', [id]);
+    const oldVersion = readVersion(lecture.id);
+    let newVersion = oldVersion;
+    const commit = candidates => {
+      savedCover = saveCover(cover);
+      return db.transaction(() => {
+        if (candidates) {
+          db.run('DELETE FROM chapters WHERE lecture_id = ?', [id]);
+          addChapters(id, slug, title, candidates);
+        } else if (slug !== lecture.slug) {
+          for (const chapter of oldChapters) {
+            const relative = chapter.path === lecture.slug ? '' : chapter.path.slice(lecture.slug.length + 1);
+            db.run('UPDATE chapters SET path = ? WHERE id = ?', [relative ? `${slug}/${relative}` : slug, chapter.id]);
+          }
+        }
+        db.run(`UPDATE lectures SET title = ?, slug = ?, zip_name = ?, category_id = ?, cover_path = ?, layout_mode = ?, is_public = ? WHERE id = ?`,
+          [title, slug, file ? path.parse(file.originalname).name : lecture.zip_name, categoryId || lecture.category_id,
+            savedCover || lecture.cover_path, layoutMode, isPublic, id]);
+      });
+    };
     if (file) {
-      const isZip = file.originalname.toLowerCase().endsWith('.zip');
-      const isSingleHtml = isHtmlFile(file.originalname);
-      if (!isZip && !isSingleHtml) {
-        cleanupUpload(file);
-        return res.status(400).json({ error: '仅支持 ZIP 或 HTML 文件' });
-      }
-
-      const extractPath = safeLecturePath(activeSlug);
-      atomicWriteDir(lecturesRoot, extractPath, (tmpDir) => {
-        extractLectureContent(file, tmpDir);
+      await atomicWriteDir(lecturesRoot, newPath, async stage => {
+        await extractLectureContent(file, stage);
+        const candidates = buildChapterCandidates(stage);
+        if (!candidates.length) throw new Error('未找到可用 HTML 文件');
+        return candidates;
+      }, {
+        sourceDir: oldPath,
+        retainPrevious: true,
+        commit(candidates, previousDir) {
+          newVersion = snapshotVersion(lecture, oldChapters, previousDir);
+          commitVersion(lecture.id, newVersion, () => commit(candidates));
+          committed = true;
+        }
       });
-      cleanupUpload(file);
-
-      const chapterCandidates = buildChapterCandidates(extractPath);
-      if (chapterCandidates.length === 0) {
-        throw new Error('未找到可用 HTML 文件');
-      }
-      // 预计算章节，待事务内写入
-      const usedSlugs = new Set();
-      rebuiltChapters = chapterCandidates.map((chapter, index) => {
-        const chapterSlug = chapterCandidates.length === 1
-          ? activeSlug
-          : chapterSlugFromName(chapter.slugSource, usedSlugs);
-        const chapterPath = chapter.path ? `${activeSlug}/${chapter.path}` : activeSlug;
-        return {
-          title: chapter.title || title,
-          slug: chapterSlug,
-          path: chapterPath,
-          entryFile: chapter.entryFile,
-          orderIndex: index
-        };
-      });
-    } else if (newSlug && newSlug !== oldSlug) {
-      // 仅改 slug：原子重命名目录
-      const oldPath = safeLecturePath(oldSlug);
-      const newPath = safeLecturePath(newSlug);
-      if (fs.existsSync(oldPath) && !fs.existsSync(newPath)) {
-        fs.renameSync(oldPath, newPath);
+      cleanupVersion(oldVersion, [savedCover || lecture.cover_path, newVersion?.lecture.cover_path]);
+    } else {
+      let renamed = false;
+      try {
+        if (oldPath !== newPath) {
+          fs.renameSync(oldPath, newPath);
+          renamed = true;
+        }
+        commit(null);
+        committed = true;
+      } catch (err) {
+        if (renamed) fs.renameSync(newPath, oldPath);
+        throw err;
       }
     }
-
-    // === 阶段 2：数据库事务（slug 更新/章节路径更新/章节重建/讲义更新 全部原子）===
-    db.transaction(() => {
-      // slug 变更 → 更新所有章节的 path 前缀
-      if (newSlug && newSlug !== oldSlug) {
-        const chapters = db.query('SELECT id, path FROM chapters WHERE lecture_id = ?', [id]);
-        const escapedOld = oldSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        chapters.forEach(chapter => {
-          const newChapterPath = chapter.path.replace(new RegExp('^' + escapedOld), newSlug);
-          db.run('UPDATE chapters SET path = ? WHERE id = ?', [newChapterPath, chapter.id]);
-        });
-      }
-
-      // 内容重传 → 删除旧章节，写入新章节
-      if (rebuiltChapters) {
-        db.run('DELETE FROM chapters WHERE lecture_id = ?', [id]);
-        rebuiltChapters.forEach(ch => {
-          db.run(`
-            INSERT INTO chapters (lecture_id, title, slug, path, entry_file, order_index)
-            VALUES (?, ?, ?, ?, ?, ?)
-          `, [id, ch.title, ch.slug, ch.path, ch.entryFile, ch.orderIndex]);
-        });
-      }
-
-      // 更新讲义主记录
-      const updateFields = [];
-      const updateValues = [];
-      if (title) { updateFields.push('title = ?'); updateValues.push(title); }
-      if (newSlug) { updateFields.push('slug = ?'); updateValues.push(newSlug); }
-      if (categoryId) { updateFields.push('category_id = ?'); updateValues.push(categoryId); }
-      if (coverPath !== lecture.cover_path) { updateFields.push('cover_path = ?'); updateValues.push(coverPath); }
-      updateFields.push('layout_mode = ?'); updateValues.push(layoutMode);
-      updateFields.push('is_public = ?'); updateValues.push(isPublic);
-      updateValues.push(id);
-      db.run(`UPDATE lectures SET ${updateFields.join(', ')} WHERE id = ?`, updateValues);
-    });
-
-    const updated = db.get(`
-      SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.layout_mode, l.is_public, l.created_at,
-             c.name as category_name
-      FROM lectures l
-      LEFT JOIN categories c ON l.category_id = c.id
-      WHERE l.id = ?
-    `, [id]);
-    updated.chapters = db.query(`
-      SELECT id, lecture_id, title, slug, path, entry_file, order_index
-      FROM chapters WHERE lecture_id = ? ORDER BY order_index
-    `, [id]);
-    res.json(getPublicLecture(updated));
+    if (savedCover && lecture.cover_path !== newVersion?.lecture.cover_path) cleanupSavedCover(lecture.cover_path);
+    res.json(updatedLecture(id));
   } catch (err) {
-    logger.error({ reqId: req.id, id, err: err && err.stack ? err.stack : String(err) }, 'lecture_update_error');
-    cleanupUpload(cover);
-    cleanupUpload(file);
-    if (coverPath && coverPath !== lecture.cover_path) {
-      const savedCoverPath = safeCoverPath(coverPath);
-      if (fs.existsSync(savedCoverPath)) fs.unlinkSync(savedCoverPath);
-    }
-    res.status(500).json({ error: '更新失败: ' + err.message });
+    logger.error({ reqId: req.id, id, err: String(err) }, 'lecture_update_error');
+    res.status(/ZIP|HTML|文件名|上传文件/.test(err.message) ? 400 : 500).json({ error: '更新失败: ' + err.message });
+  } finally {
+    cleanupFiles([cover, file]);
+    if (!committed && savedCover) cleanupSavedCover(savedCover);
   }
+}));
+
+router.get('/:id/versions', adminAuth, (req, res, next) => {
+  try {
+    const lecture = db.get('SELECT id FROM lectures WHERE id = ?', [req.params.id]);
+    if (!lecture) return res.status(404).json({ error: '讲义不存在' });
+    const version = readVersion(lecture.id);
+    res.json(version && fs.existsSync(versionContent(version)) ? [{
+      id: 'previous', created_at: version.created_at, title: version.lecture.title,
+      zip_name: version.lecture.zip_name, chapter_count: version.chapters.length
+    }] : []);
+  } catch (err) { next(err); }
 });
 
+router.post('/:id/restore', adminAuth, serializeMutation(async (req, res) => {
+  const lecture = db.get('SELECT * FROM lectures WHERE id = ?', [req.params.id]);
+  if (!lecture) return res.status(404).json({ error: '讲义不存在' });
+  try {
+    const version = readVersion(lecture.id);
+    if (!version || !fs.existsSync(versionContent(version))) return res.status(404).json({ error: '没有可恢复的上一版' });
+    const oldChapters = db.query('SELECT * FROM chapters WHERE lecture_id = ? ORDER BY order_index', [lecture.id]);
+    await atomicWriteDir(lecturesRoot, safeLecturePath(lecture.slug), async stage => {
+      await fs.promises.cp(versionContent(version), stage, { recursive: true, dereference: false });
+      // Older snapshots must never reintroduce symlinks or escaped chapter paths.
+      const walk = directory => {
+        for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
+          if (item.isSymbolicLink()) throw new Error('历史版本包含符号链接');
+          if (item.isDirectory()) walk(path.join(directory, item.name));
+          else if (!item.isFile()) throw new Error('历史版本包含特殊文件');
+        }
+      };
+      walk(stage);
+      for (const chapter of version.chapters) {
+        const candidate = assertWithin(stage, path.resolve(stage, chapter.path, chapter.entry_file));
+        if (!fs.statSync(candidate).isFile()) throw new Error('历史章节 HTML 不存在');
+      }
+    }, {
+      retainPrevious: true,
+      commit(value, previousDir) {
+        const nextVersion = snapshotVersion(lecture, oldChapters, previousDir);
+        commitVersion(lecture.id, nextVersion, () => db.transaction(() => {
+          db.run('DELETE FROM chapters WHERE lecture_id = ?', [lecture.id]);
+          for (const chapter of version.chapters) {
+            db.run(`INSERT INTO chapters (lecture_id, title, slug, path, entry_file, order_index) VALUES (?, ?, ?, ?, ?, ?)`,
+              [lecture.id, chapter.title, version.chapters.length === 1 ? lecture.slug : chapter.slug,
+                chapter.path ? `${lecture.slug}/${chapter.path}` : lecture.slug, chapter.entry_file, chapter.order_index]);
+          }
+          db.run('UPDATE lectures SET title = ?, zip_name = ?, cover_path = ?, layout_mode = ? WHERE id = ?',
+            [version.lecture.title, version.lecture.zip_name, version.lecture.cover_path, version.lecture.layout_mode, lecture.id]);
+        }));
+      }
+    });
+    cleanupVersion(version, [lecture.cover_path, version.lecture.cover_path]);
+    res.json(updatedLecture(lecture.id));
+  } catch (err) {
+    logger.error({ reqId: req.id, id: lecture.id, err: String(err) }, 'lecture_restore_error');
+    res.status(500).json({ error: '恢复失败: ' + err.message });
+  }
+}));
+
 // 更新章节信息
-router.put('/:id/chapters', adminAuth, (req, res) => {
+router.put('/:id/chapters', adminAuth, serializeMutation((req, res) => {
   const { id } = req.params;
   const chapters = req.body.chapters;
 
@@ -833,7 +737,7 @@ router.put('/:id/chapters', adminAuth, (req, res) => {
     console.error('更新章节错误:', err);
     res.status(500).json({ error: '更新章节失败: ' + err.message });
   }
-});
+}));
 router.get('/toc/:lectureSlug/:chapterSlug', optionalStudentAuth, (req, res) => {
   const { lectureSlug, chapterSlug } = req.params;
   const chapter = db.get(`
