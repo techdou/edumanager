@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            client/package-lock.json
+
+      - name: Install server deps
+        run: npm ci
+
+      - name: Server syntax check
+        run: npm run check
+
+      - name: Server and learning regressions
+        run: npm test
+
+      - name: Isolated transaction regression
+        run: npm run test:tx
+
+      # 前端：单测 + 构建
+      - name: Install client deps
+        working-directory: client
+        run: npm ci
+
+      - name: Client unit tests
+        working-directory: client
+        run: npm test
+
+      - name: Client build
+        working-directory: client
+        run: npm run build

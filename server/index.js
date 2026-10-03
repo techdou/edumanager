@@ -16,6 +16,8 @@ const categoryRoutes = require('./routes/category');
 const adminRoutes = require('./routes/admin');
 const knowledgeRoutes = require('./routes/knowledge');
 const progressRoutes = require('./routes/progress');
+const searchRoutes = require('./routes/search');
+const notesRoutes = require('./routes/notes');
 
 const app = express();
 app.disable('x-powered-by');
@@ -47,6 +49,8 @@ app.use('/api/categories', categoryRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/knowledge', knowledgeRoutes);
 app.use('/api/progress', progressRoutes);
+app.use('/api/search', searchRoutes);
+app.use('/api/notes', notesRoutes);
 app.use('/api', (req, res) => res.status(404).json({ error: '接口不存在' }));
 
 // 健康检查（无需鉴权，供负载均衡/监控探活）
@@ -77,8 +81,8 @@ app.get('/lectures/:lectureSlug/*', optionalStudentAuth, (req, res) => {
   if (!requested) {
     return res.status(404).send('File not found');
   }
-  res.setHeader('Cache-Control', 'private, no-store');
-  res.setHeader('Content-Security-Policy', "sandbox allow-scripts allow-same-site-none-cookies; frame-ancestors 'self'");
+  res.setHeader('Cache-Control', lecture.is_public === 1 ? 'public, max-age=0, must-revalidate' : 'private, no-store');
+  res.setHeader('Content-Security-Policy', "sandbox allow-scripts allow-modals allow-same-site-none-cookies; frame-ancestors 'self'");
   if (/\.(html?|xhtml)$/i.test(requested)) {
     // Uploaded HTML keeps its own scripts but cannot access the app's origin/storage.
     if (req.method === 'HEAD') return res.type('html').end();
@@ -139,6 +143,7 @@ function shutdown(signal) {
 }
 async function start(port = PORT) {
   db.init();
+  require('./utils/searchIndex').initSearchIndex();
   if (config.isProd) {
     await db.backup('.startup');
   }

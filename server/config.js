@@ -7,15 +7,12 @@ const fs = require('fs');
 
 // Production keys must be explicit and must not be copied placeholders.
 const JWT_SECRET = process.env.JWT_SECRET;
-const DEV_JWT_SECRET = '__dev_only_insecure_secret_do_not_use_in_prod__';
 const isProd = process.env.NODE_ENV === 'production';
 const placeholderSecret = /(?:请替换|替换为|至少\d+|__dev_only|change[-_ ]?me|your[-_ ]?(?:jwt[-_ ]?)?secret|replace[-_ ]?(?:me|this))/i;
-if (isProd && (!JWT_SECRET || JWT_SECRET.trim().length < 32 || JWT_SECRET !== JWT_SECRET.trim() || placeholderSecret.test(JWT_SECRET))) {
-  throw new Error('生产环境 JWT_SECRET 必须为至少 32 字符的随机密钥，不能使用模板或开发默认值');
+if (!JWT_SECRET || JWT_SECRET.trim().length < 32 || JWT_SECRET !== JWT_SECRET.trim() || placeholderSecret.test(JWT_SECRET)) {
+  throw new Error(`${isProd ? '生产环境' : '开发环境'} JWT_SECRET 必须为至少 32 字符的随机密钥，不能使用模板或开发默认值`);
 }
-if (!JWT_SECRET && !isProd) {
-  console.warn('[CONFIG] 开发环境未配置 JWT_SECRET，暂时使用仅供本地开发的默认值。');
-}
+
 
 const port = Number(process.env.PORT) || 3142;
 
@@ -43,7 +40,7 @@ fs.mkdirSync(lecturesDir, { recursive: true });
 
 module.exports = {
   port,
-  jwtSecret: JWT_SECRET || DEV_JWT_SECRET,
+  jwtSecret: JWT_SECRET,
   corsOrigin,
   rootDir,
   dataDir,

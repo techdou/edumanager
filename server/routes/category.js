@@ -21,7 +21,8 @@ router.post('/', adminAuth, (req, res) => {
   res.json({ id: result.lastInsertRowid, name });
 });
 
-// 删除分类（需管理员）
+// 删除分类（需管理员）。
+// 分类被 lectures/knowledge_docs/权限表引用，四条清理必须包事务，与 admin.js 的实现保持一致
 router.delete('/:id', adminAuth, (req, res) => {
   const { id } = req.params;
 
@@ -30,10 +31,12 @@ router.delete('/:id', adminAuth, (req, res) => {
     return res.status(404).json({ error: '分类不存在' });
   }
 
-  db.run('UPDATE lectures SET category_id = NULL WHERE category_id = ?', [id]);
-  db.run('UPDATE knowledge_docs SET category_id = NULL WHERE category_id = ?', [id]);
-  db.run('DELETE FROM group_category_permissions WHERE category_id = ?', [id]);
-  db.run('DELETE FROM categories WHERE id = ?', [id]);
+  db.transaction(() => {
+    db.run('UPDATE lectures SET category_id = NULL WHERE category_id = ?', [id]);
+    db.run('UPDATE knowledge_docs SET category_id = NULL WHERE category_id = ?', [id]);
+    db.run('DELETE FROM group_category_permissions WHERE category_id = ?', [id]);
+    db.run('DELETE FROM categories WHERE id = ?', [id]);
+  });
   res.json({ success: true });
 });
 

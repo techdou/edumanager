@@ -1,0 +1,24 @@
+{
+  "name": "EduManager - 在线教育讲义管理平台",
+  "short_name": "EduManager",
+  "description": "上传、分类、分发课程资料，学生随时随地在线学习",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#faf9f7",
+  "theme_color": "#2f6fed",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/logo-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

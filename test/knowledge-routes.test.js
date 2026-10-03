@@ -18,13 +18,13 @@ test('knowledge writes preserve database and file consistency', async t => {
   const database = new Database(':memory:');
   database.exec(`
     CREATE TABLE admins(id INTEGER PRIMARY KEY, username TEXT);
-    CREATE TABLE students(id INTEGER PRIMARY KEY, username TEXT, status TEXT);
+    CREATE TABLE students(id INTEGER PRIMARY KEY, username TEXT, status TEXT, pwd_updated_at TEXT);
     CREATE TABLE categories(id INTEGER PRIMARY KEY, name TEXT);
     CREATE TABLE knowledge_docs(id INTEGER PRIMARY KEY, title TEXT, url TEXT, summary TEXT,
       category_id INTEGER, source TEXT, file_path TEXT, file_name TEXT, file_type TEXT,
       cover_path TEXT, is_featured INTEGER, is_public INTEGER, created_at TEXT, updated_at TEXT);
     INSERT INTO admins VALUES(1, 'admin');
-    INSERT INTO students VALUES(1, 'admin', 'active');
+    INSERT INTO students(id, username, status) VALUES(1, 'admin', 'active');
   `);
   let failWrite;
   const db = {

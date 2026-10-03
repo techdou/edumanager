@@ -38,7 +38,7 @@ function showToast(message, type = 'error') {
   toastEl._timer = setTimeout(() => { toastEl.style.opacity = '0' }, 4000)
 }
 
-// 请求拦截：自动带 token
+// 请求拦截：自动带 token（已由调用方注入 Authorization 时不覆盖，如 adminApi 绝对路径请求）
 api.interceptors.request.use((config) => {
   const isAdminApi = config.authRole === 'admin' || (config.url || '').includes('/api/admin') || window.location.pathname.startsWith('/admin')
   config.headers ||= {}

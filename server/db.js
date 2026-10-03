@@ -150,6 +150,35 @@ const MIGRATIONS = [
       FOREIGN KEY (chapter_id, lecture_id) REFERENCES chapters(id, lecture_id) ON DELETE CASCADE
     )`);
     database.exec('CREATE INDEX idx_student_progress_updated ON student_progress(student_id, updated_at)');
+  } },
+  { version: 3, name: 'main_features_and_legacy_progress', apply(database) {
+    const studentColumns = new Set(database.pragma('table_info(students)').map(column => column.name));
+    if (!studentColumns.has('pwd_updated_at')) database.exec('ALTER TABLE students ADD COLUMN pwd_updated_at INTEGER NOT NULL DEFAULT 0');
+    const lectureColumns = new Set(database.pragma('table_info(lectures)').map(column => column.name));
+    if (!lectureColumns.has('scan_report')) database.exec('ALTER TABLE lectures ADD COLUMN scan_report TEXT');
+    database.exec(`CREATE TABLE IF NOT EXISTS user_progress (
+      student_id INTEGER NOT NULL, lecture_slug TEXT NOT NULL, chapter_slug TEXT NOT NULL,
+      lecture_title TEXT, chapter_title TEXT, progress INTEGER DEFAULT 0,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (student_id, lecture_slug, chapter_slug)
+    )`);
+    database.exec(`CREATE TABLE IF NOT EXISTS notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, student_id INTEGER NOT NULL,
+      lecture_slug TEXT NOT NULL, chapter_slug TEXT NOT NULL, content TEXT NOT NULL, anchor TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+    database.exec('CREATE INDEX IF NOT EXISTS idx_user_progress_updated ON user_progress(updated_at)');
+    database.exec('CREATE INDEX IF NOT EXISTS idx_notes_student ON notes(student_id)');
+    // Retain the entire legacy table, including unmatched historical chapters. Canonical
+    // records win when both branches already wrote the same student's current chapter.
+    database.exec(`INSERT OR IGNORE INTO student_progress
+      (student_id, lecture_id, chapter_id, position, completed, updated_at)
+      SELECT old.student_id, l.id, c.id,
+        MAX(0, MIN(100, COALESCE(CAST(old.progress AS REAL), 0))), 0,
+        COALESCE(old.updated_at, CURRENT_TIMESTAMP)
+      FROM user_progress old JOIN students s ON s.id = old.student_id
+      JOIN lectures l ON l.slug = old.lecture_slug
+      JOIN chapters c ON c.lecture_id = l.id AND c.slug = old.chapter_slug`);
   } }
 ];
 

@@ -27,6 +27,9 @@ function canAccessLecture(studentId, lecture) {
   return accessibleCategories.includes(lecture.category_id);
 }
 
+// Knowledge documents follow the same live category and administrator policy.
+const canAccessKnowledge = canAccessLecture;
+
 function filterAccessibleLectures(studentId, lectures) {
   if (!studentId) return lectures.filter(l => l.is_public === 1);
   if (isAdminStudent(studentId)) return lectures;
@@ -43,4 +46,4 @@ function isAdminStudent(studentId) {
   `, [studentId]);
 }
 
-module.exports = { getStudentGroups, getAccessibleCategories, canAccessLecture, filterAccessibleLectures, isAdminStudent };
+module.exports = { getStudentGroups, getAccessibleCategories, canAccessLecture, filterAccessibleLectures, isAdminStudent, canAccessKnowledge };

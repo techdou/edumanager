@@ -27,6 +27,8 @@
         window.scrollTo(0, distance * Math.max(0, Math.min(100, progress)) / 100);
         report();
       }, 100);
+    } else if (event.data?.type === 'print-document') {
+      window.print();
     } else if (event.data?.type === 'scroll-to-anchor' && typeof event.data.anchor === 'string') {
       document.getElementById(event.data.anchor.replace(/^#/, ''))?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }

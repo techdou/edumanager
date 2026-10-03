@@ -75,12 +75,13 @@ function safeJson(value) {
   }
 }
 
-// 用户列表：分页、搜索、角色和状态筛选
-router.get('/users', (req, res) => {
-  const { page, pageSize, offset } = parsePage(req.query);
+// 用户列表：分页、搜索、角色和状态筛选。
+// all=1 时不分页（上限 5000），供"班级添加学生"下拉拉全量，避免超过一页的学生永远选不到
+router.get('/users', async (req, res) => {
   const search = String(req.query.search || '').trim();
   const role = req.query.role;
   const status = req.query.status;
+  const fetchAll = req.query.all === '1';
 
   const conditions = [];
   const params = [];
@@ -102,6 +103,9 @@ router.get('/users', (req, res) => {
   }
 
   const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const { page, pageSize, offset } = parsePage(req.query);
+  const limit = fetchAll ? Math.min(Math.max(parseInt(req.query.limit, 10) || 5000, 1), 5000) : pageSize;
+
   const countRow = db.get(`
     SELECT COUNT(*) AS total
     FROM students s
@@ -117,17 +121,29 @@ router.get('/users', (req, res) => {
     ${whereClause}
     ORDER BY s.created_at DESC, s.id DESC
     LIMIT ? OFFSET ?
-  `, [...params, pageSize, offset]);
+  `, [...params, limit, fetchAll ? 0 : offset]);
 
   const total = Number(countRow?.total || 0);
 
-  items.forEach(item => {
-    item.groups = db.query(`
-      SELECT g.id, g.name FROM groups g
-      INNER JOIN group_students gs ON gs.group_id = g.id
-      WHERE gs.student_id = ?
-    `, [item.id]);
-  });
+  // 一次查出本页全部学生的班级关系再内存分组，避免逐行查询（N+1）
+  if (items.length > 0) {
+    const ids = items.map(item => item.id);
+    const placeholders = ids.map(() => '?').join(',');
+    const groupRows = db.query(`
+      SELECT gs.student_id, g.id, g.name
+      FROM group_students gs
+      INNER JOIN groups g ON g.id = gs.group_id
+      WHERE gs.student_id IN (${placeholders})
+    `, ids);
+    const groupsByStudent = new Map();
+    groupRows.forEach(row => {
+      if (!groupsByStudent.has(row.student_id)) groupsByStudent.set(row.student_id, []);
+      groupsByStudent.get(row.student_id).push({ id: row.id, name: row.name });
+    });
+    items.forEach(item => {
+      item.groups = groupsByStudent.get(item.id) || [];
+    });
+  }
 
   res.json({
     items,
@@ -139,7 +155,7 @@ router.get('/users', (req, res) => {
 });
 
 // 创建用户
-router.post('/users', (req, res) => {
+router.post('/users', async (req, res) => {
   const username = String(req.body.username || '').trim();
   const password = String(req.body.password || '');
   const email = String(req.body.email || '').trim() || null;
@@ -156,7 +172,7 @@ router.post('/users', (req, res) => {
     return res.status(400).json({ error: '用户名已存在' });
   }
 
-  const passwordHash = bcrypt.hashSync(password, 10);
+  const passwordHash = await bcrypt.hash(password, 10);
   // 事务：students 与 admins 双写必须原子
   const result = db.transaction(() => {
     const r = db.run(`
@@ -194,7 +210,7 @@ router.get('/users/:id', (req, res) => {
 });
 
 // 编辑用户
-router.put('/users/:id', (req, res) => {
+router.put('/users/:id', async (req, res) => {
   const user = getUserById(req.params.id);
   if (!user) {
     return res.status(404).json({ error: '用户不存在' });
@@ -223,14 +239,16 @@ router.put('/users/:id', (req, res) => {
     return res.status(400).json({ error: '至少需要保留一个启用状态的管理员' });
   }
 
-  const passwordHash = password ? bcrypt.hashSync(password, 10) : null;
+  const passwordHash = password ? await bcrypt.hash(password, 10) : null;
   const studentHash = passwordHash || db.get('SELECT password_hash FROM students WHERE id = ?', [user.id]).password_hash;
 
-  // 事务：students 表与 admins 表的角色/密码/用户名同步必须原子，避免半边更新
+  // 事务：students 表与 admins 表的角色/密码/用户名同步必须原子，避免半边更新。
+  // 改密码同时更新 pwd_updated_at（unixepoch 秒），让该用户已签发的全部旧 token 立即失效
   db.transaction(() => {
     db.run(`
       UPDATE students
-      SET username = ?, email = ?, status = ?${passwordHash ? ', password_hash = ?' : ''}
+      SET username = ?, email = ?, status = ?
+        ${passwordHash ? ', password_hash = ?, pwd_updated_at = CAST(strftime(\'%s\', \'now\') AS INTEGER)' : ''}
       WHERE id = ?
     `, passwordHash
       ? [username, email, status, passwordHash, user.id]
@@ -446,6 +464,108 @@ router.delete('/categories/:id', (req, res) => {
     db.run('DELETE FROM categories WHERE id = ?', [req.params.id]);
   });
   res.json({ success: true });
+});
+
+// ===== 学习数据看板（F3）=====
+
+// 学习进度总览：班级×讲义矩阵 + 每讲义的学习人数/平均进度/完成人数
+router.get('/stats/progress-overview', (req, res) => {
+  const groups = db.query('SELECT id, name FROM groups ORDER BY created_at DESC');
+
+  // 每班级的学生集合
+  const membersByGroup = new Map();
+  groups.forEach(g => {
+    membersByGroup.set(g.id, new Set(
+      db.query('SELECT student_id FROM group_students WHERE group_id = ?', [g.id]).map(r => r.student_id)
+    ));
+  });
+
+  // 学生 × 讲义 的最新平均进度（一名学生对同一讲义多个章节取平均）
+  const progressRows = db.query(`
+    SELECT p.student_id, l.slug AS lecture_slug, l.title AS lecture_title, AVG(p.position) AS avg_progress,
+      CASE WHEN SUM(p.completed) = (SELECT COUNT(*) FROM chapters WHERE lecture_id=l.id)
+        THEN 1 ELSE 0 END AS finished
+    FROM student_progress p JOIN lectures l ON l.id=p.lecture_id
+    GROUP BY p.student_id, p.lecture_id
+  `);
+  const byLecture = new Map();
+  const byStudentLecture = new Map();
+  progressRows.forEach(row => {
+    const key = `${row.student_id}:${row.lecture_slug}`;
+    byStudentLecture.set(key, row.avg_progress);
+    if (!byLecture.has(row.lecture_slug)) {
+      byLecture.set(row.lecture_slug, { lecture_slug: row.lecture_slug, lecture_title: row.lecture_title, learners: 0, progressSum: 0, completed: 0 });
+    }
+    const item = byLecture.get(row.lecture_slug);
+    item.learners += 1;
+    item.progressSum += row.avg_progress;
+    if (row.finished) item.completed += 1;
+  });
+
+  // 组×讲义 矩阵（该组成员对该讲义的平均进度）
+  const matrix = groups.map(g => {
+    const cells = {};
+    for (const [lectureSlug, item] of byLecture.entries()) {
+      let sum = 0;
+      let count = 0;
+      for (const studentId of membersByGroup.get(g.id)) {
+        const p = byStudentLecture.get(`${studentId}:${lectureSlug}`);
+        if (p !== undefined) { sum += p; count += 1; }
+      }
+      if (count > 0) cells[lectureSlug] = Math.round(sum / count);
+    }
+    return { group_id: g.id, group_name: g.name, student_count: membersByGroup.get(g.id).size, cells };
+  });
+
+  const lectures = [...byLecture.values()].map(item => ({
+    lecture_slug: item.lecture_slug,
+    lecture_title: item.lecture_title,
+    learners: item.learners,
+    avg_progress: Math.round(item.progressSum / Math.max(1, item.learners)),
+    completed: item.completed
+  })).sort((a, b) => b.learners - a.learners);
+
+  res.json({ groups: matrix, lectures });
+});
+
+// 断点续学名单：7 天未回访、且有进行中讲义（0 < 平均进度 < 100）的学生
+router.get('/stats/stalled', (req, res) => {
+  const rows = db.query(`
+    SELECT s.id AS student_id, s.username, s.real_name,
+           MAX(up.updated_at) AS last_active,
+           COUNT(*) AS in_progress,
+           ROUND(AVG(up.avg_progress), 0) AS avg_progress
+    FROM (
+      SELECT p.student_id, l.slug AS lecture_slug, AVG(p.position) AS avg_progress, MAX(p.updated_at) AS updated_at
+      FROM student_progress p JOIN lectures l ON l.id=p.lecture_id
+      GROUP BY p.student_id, p.lecture_id
+      HAVING AVG(p.position) > 0
+        AND SUM(p.completed) < (SELECT COUNT(*) FROM chapters WHERE lecture_id=l.id)
+    ) up
+    INNER JOIN students s ON s.id = up.student_id
+    WHERE s.status = 'active'
+    GROUP BY s.id
+    HAVING MAX(up.updated_at) < datetime('now', '-7 days')
+    ORDER BY last_active ASC
+    LIMIT 100
+  `);
+  res.json(rows);
+});
+
+// 卡点章节：学习人数 ≥3 的章节里平均进度最低的 Top 10（内容难或写得差的信号）
+router.get('/stats/stuck-chapters', (req, res) => {
+  const rows = db.query(`
+    SELECT l.slug AS lecture_slug, l.title AS lecture_title, c.slug AS chapter_slug, c.title AS chapter_title,
+           COUNT(*) AS learners,
+           ROUND(AVG(p.position), 0) AS avg_progress
+    FROM student_progress p JOIN lectures l ON l.id=p.lecture_id
+      JOIN chapters c ON c.id=p.chapter_id AND c.lecture_id=l.id
+    GROUP BY p.lecture_id, p.chapter_id
+    HAVING COUNT(*) >= 3 AND AVG(p.position) < 99.5
+    ORDER BY avg_progress ASC
+    LIMIT 10
+  `);
+  res.json(rows);
 });
 
 // ===== 班级管理 =====

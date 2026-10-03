@@ -156,8 +156,9 @@
 </template>
 
 <script setup>
-import { ref, watch, onUnmounted } from 'vue'
+import { ref, watch, nextTick, onUnmounted } from 'vue'
 import axios from '../lib/http'
+import adminApi from '../lib/adminApi'
 
 const props = defineProps({
   visible: Boolean,
@@ -336,9 +337,9 @@ async function save() {
                           JSON.stringify((props.lecture.chapters || []).map(c => c.id))
 
       if (chaptersChanged || orderChanged) {
-        await axios.put(`/api/lectures/${props.lecture.id}/chapters`, {
+        await adminApi.put(`/api/lectures/${props.lecture.id}/chapters`, {
           chapters: form.value.chapters.map((c, i) => ({ id: c.id, title: c.title, order: i }))
-        }, { headers })
+        })
       }
     }
 

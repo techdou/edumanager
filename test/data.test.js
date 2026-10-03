@@ -68,7 +68,7 @@ test('versioned migration is idempotent, adds historical columns and preserves o
     INSERT INTO group_students VALUES (999, 5);`);
   db.migrate(database);
   db.migrate(database);
-  assert.equal(database.prepare('SELECT COUNT(*) n FROM schema_migrations').get().n, 2);
+  assert.equal(database.prepare('SELECT COUNT(*) n FROM schema_migrations').get().n, 3);
   assert.equal(database.prepare('SELECT status FROM students WHERE id = 5').get().status, 'active');
   assert.equal(database.prepare('SELECT title, is_public FROM lectures WHERE id = 7').get().title, 'Old title');
   assert.equal(database.prepare('SELECT is_public FROM knowledge_docs WHERE id = 8').get().is_public, 0);
@@ -279,7 +279,7 @@ test('configuration isolates upload storage and rejects invalid retention and pr
   for (const secret of ['', 'too-short', '请替换为至少48字节的随机十六进制字符串'.repeat(2), '__dev_only_insecure_secret_do_not_use_in_prod__', 'your_jwt_secret_please_change_me_to_random_string']) {
     const result = probe({ ...baseEnv, JWT_SECRET: secret });
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /生产环境 JWT_SECRET/);
+    assert.match(result.stderr, /JWT_SECRET/);
   }
   for (const retention of ['0', '-1', '1.5', 'not-a-number']) {
     const result = probe({ ...baseEnv, BACKUP_RETENTION: retention });
@@ -287,6 +287,6 @@ test('configuration isolates upload storage and rejects invalid retention and pr
     assert.match(result.stderr, /BACKUP_RETENTION/);
   }
   const development = probe({ ...baseEnv, NODE_ENV: 'development', JWT_SECRET: '' });
-  assert.equal(development.status, 0);
-  assert.equal(JSON.parse(development.stdout).isProd, false);
+  assert.equal(development.status, 1);
+  assert.match(development.stderr, /JWT_SECRET/);
 });

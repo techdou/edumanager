@@ -15,6 +15,8 @@ const { filterAccessibleLectures, canAccessLecture } = require('../utils/permiss
 const { extractTOC } = require('../utils/tocExtractor');
 const { atomicWriteDir, assertWithin } = require('../utils/fs');
 const { extractLectureContent, inspectUpload, validateUpload } = require('../utils/upload');
+const { rebuildLectureIndex, removeLectureIndex } = require('../utils/searchIndex');
+const { processLectureHtml } = require('../utils/sanitizer');
 
 // ZIP 上传配置
 const upload = multer({
@@ -83,8 +85,11 @@ function safeCoverPath(relativePath) {
 }
 
 function getPublicLecture(lecture) {
+  let report = lecture.scan_report;
+  if (typeof report === 'string') { try { report = JSON.parse(report); } catch { report = null; } }
   return {
     ...lecture,
+    scan_report: report || null,
     cover_url: lecture.cover_path ? `/api/lectures/${lecture.id}/cover` : null
   };
 }
@@ -269,7 +274,7 @@ function snapshotVersion(lecture, chapters, contentDir) {
     schema: 1,
     created_at: new Date().toISOString(),
     content: path.basename(contentDir),
-    lecture: { title: lecture.title, zip_name: lecture.zip_name, cover_path: lecture.cover_path, layout_mode: lecture.layout_mode },
+    lecture: { title: lecture.title, zip_name: lecture.zip_name, cover_path: lecture.cover_path, layout_mode: lecture.layout_mode, scan_report: lecture.scan_report },
     chapters: chapters.map(chapter => ({
       title: chapter.title,
       slug: chapter.slug,
@@ -334,20 +339,19 @@ router.post('/precheck', adminAuth, (req, res, next) => {
 
 function fetchLectureList() {
   const lectures = db.query(`
-    SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.layout_mode, l.is_public, l.created_at,
+    SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.layout_mode, l.is_public, l.scan_report, l.created_at,
            c.name as category_name
     FROM lectures l
     LEFT JOIN categories c ON l.category_id = c.id
     ORDER BY l.created_at DESC
   `);
 
-  return lectures.map(lecture => {
-    const chapters = db.query(`
-      SELECT id, lecture_id, title, slug, path, entry_file, order_index
-      FROM chapters WHERE lecture_id = ? ORDER BY order_index
-    `, [lecture.id]);
-    return getPublicLecture({ ...lecture, chapters });
-  });
+  const chaptersByLecture = new Map();
+  for (const chapter of db.query('SELECT id, lecture_id, title, slug, path, entry_file, order_index FROM chapters ORDER BY lecture_id, order_index')) {
+    if (!chaptersByLecture.has(chapter.lecture_id)) chaptersByLecture.set(chapter.lecture_id, []);
+    chaptersByLecture.get(chapter.lecture_id).push(chapter);
+  }
+  return lectures.map(lecture => getPublicLecture({ ...lecture, chapters: chaptersByLecture.get(lecture.id) || [] }));
 }
 
 // 讲义列表 - 未登录返回公开，登录后自动返回公开+有权限，管理员返回全部
@@ -355,6 +359,15 @@ router.get('/', optionalStudentAuth, (req, res) => {
   const allLectures = fetchLectureList();
 
   res.json(filterAccessibleLectures(req.student?.id, allLectures));
+});
+
+// Detail and lists share live account and category permissions.
+router.get('/detail/:slug', optionalStudentAuth, (req, res) => {
+  const lecture = db.get('SELECT * FROM lectures WHERE slug = ?', [req.params.slug]);
+  if (!lecture) return res.status(404).json({ error: '讲义不存在' });
+  if (!canAccessLecture(req.student?.id, lecture)) return res.status(403).json({ error: '无权限访问该讲义' });
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.json(updatedLecture(lecture.id));
 });
 
 // 学生的学习中心列表
@@ -379,6 +392,8 @@ router.post('/', adminAuth, (req, res, next) => {
   const file = req.files?.file?.[0];
   const cover = req.files?.cover?.[0];
   let coverPath = null;
+  let scanReport = null;
+  const sanitize = req.body.sanitize !== '0';
   let committed = false;
   try {
     if (!file || !title || !slug || !categoryId) return res.status(400).json({ error: '所有字段必填' });
@@ -391,21 +406,23 @@ router.post('/', adminAuth, (req, res, next) => {
     if (fs.existsSync(extractPath)) return res.status(409).json({ error: '讲义目录已存在，请先检查历史文件' });
     const publication = await atomicWriteDir(lecturesRoot, extractPath, async stage => {
       await extractLectureContent(file, stage);
+      scanReport = processLectureHtml(stage, fs, path, { sanitize });
       const chapters = buildChapterCandidates(stage);
       if (!chapters.length) throw new Error('未找到可用 HTML 文件');
       return chapters;
     }, { commit(candidates) {
       coverPath = saveCover(cover);
       const id = db.transaction(() => {
-        const result = db.run(`INSERT INTO lectures (title, slug, zip_name, category_id, cover_path, layout_mode, is_public)
-          VALUES (?, ?, ?, ?, ?, ?, ?)`, [title, slug, path.parse(file.originalname).name, categoryId, coverPath, layoutMode, isPublic]);
+        const result = db.run(`INSERT INTO lectures (title, slug, zip_name, category_id, cover_path, layout_mode, is_public, scan_report)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [title, slug, path.parse(file.originalname).name, categoryId, coverPath, layoutMode, isPublic, JSON.stringify(scanReport)]);
         addChapters(result.lastInsertRowid, slug, title, candidates);
+        rebuildLectureIndex(result.lastInsertRowid);
         return result.lastInsertRowid;
       });
       committed = true;
       return id;
     }});
-    res.json(updatedLecture(publication.result));
+    res.json({ ...updatedLecture(publication.result), sanitized: sanitize });
   } catch (err) {
     logger.error({ reqId: req.id, err: String(err), slug }, 'lecture_upload_error');
     res.status(/ZIP|HTML|文件名|上传文件/.test(err.message) ? 400 : 500).json({ error: err.message || '讲义处理失败' });
@@ -447,6 +464,7 @@ router.delete('/:id', adminAuth, serializeMutation((req, res) => {
   db.transaction(() => {
     db.run('DELETE FROM chapters WHERE lecture_id = ?', [id]);
     db.run('DELETE FROM lectures WHERE id = ?', [id]);
+    removeLectureIndex(id);
   });
 
   // 删除文件目录（DB 已提交，文件删除失败只记日志）
@@ -498,7 +516,7 @@ router.put('/:id/category', adminAuth, serializeMutation((req, res) => {
 
   db.run('UPDATE lectures SET category_id = ? WHERE id = ?', [categoryId, id]);
   const updated = db.get(`
-    SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.layout_mode, l.is_public, l.created_at,
+    SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.layout_mode, l.is_public, l.scan_report, l.created_at,
            c.name as category_name
     FROM lectures l
     LEFT JOIN categories c ON l.category_id = c.id
@@ -523,7 +541,7 @@ router.put('/:id/public', adminAuth, serializeMutation((req, res) => {
 
   db.run('UPDATE lectures SET is_public = ? WHERE id = ?', [isPublic, id]);
   const updated = db.get(`
-    SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.layout_mode, l.is_public, l.created_at,
+    SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.layout_mode, l.is_public, l.scan_report, l.created_at,
            c.name as category_name
     FROM lectures l
     LEFT JOIN categories c ON l.category_id = c.id
@@ -552,6 +570,7 @@ router.put('/:id', adminAuth, (req, res, next) => {
   const cover = req.files?.cover?.[0];
   const file = req.files?.file?.[0];
   let savedCover = null;
+  let newScanReport = null;
   let committed = false;
   try {
     const lecture = db.get('SELECT * FROM lectures WHERE id = ?', [id]);
@@ -581,14 +600,16 @@ router.put('/:id', adminAuth, (req, res, next) => {
             db.run('UPDATE chapters SET path = ? WHERE id = ?', [relative ? `${slug}/${relative}` : slug, chapter.id]);
           }
         }
-        db.run(`UPDATE lectures SET title = ?, slug = ?, zip_name = ?, category_id = ?, cover_path = ?, layout_mode = ?, is_public = ? WHERE id = ?`,
+        db.run(`UPDATE lectures SET title = ?, slug = ?, zip_name = ?, category_id = ?, cover_path = ?, layout_mode = ?, is_public = ?, scan_report = ? WHERE id = ?`,
           [title, slug, file ? path.parse(file.originalname).name : lecture.zip_name, categoryId || lecture.category_id,
-            savedCover || lecture.cover_path, layoutMode, isPublic, id]);
+            savedCover || lecture.cover_path, layoutMode, isPublic, newScanReport ?? lecture.scan_report, id]);
+        rebuildLectureIndex(id);
       });
     };
     if (file) {
       await atomicWriteDir(lecturesRoot, newPath, async stage => {
         await extractLectureContent(file, stage);
+        newScanReport = JSON.stringify(processLectureHtml(stage, fs, path, { sanitize: req.body.sanitize !== '0' }));
         const candidates = buildChapterCandidates(stage);
         if (!candidates.length) throw new Error('未找到可用 HTML 文件');
         return candidates;
@@ -672,8 +693,9 @@ router.post('/:id/restore', adminAuth, serializeMutation(async (req, res) => {
               [lecture.id, chapter.title, version.chapters.length === 1 ? lecture.slug : chapter.slug,
                 chapter.path ? `${lecture.slug}/${chapter.path}` : lecture.slug, chapter.entry_file, chapter.order_index]);
           }
-          db.run('UPDATE lectures SET title = ?, zip_name = ?, cover_path = ?, layout_mode = ? WHERE id = ?',
-            [version.lecture.title, version.lecture.zip_name, version.lecture.cover_path, version.lecture.layout_mode, lecture.id]);
+          db.run('UPDATE lectures SET title = ?, zip_name = ?, cover_path = ?, layout_mode = ?, scan_report = ? WHERE id = ?',
+            [version.lecture.title, version.lecture.zip_name, version.lecture.cover_path, version.lecture.layout_mode, version.lecture.scan_report || null, lecture.id]);
+          rebuildLectureIndex(lecture.id);
         }));
       }
     });
@@ -719,10 +741,11 @@ router.put('/:id/chapters', adminAuth, serializeMutation((req, res) => {
         }
         db.run('UPDATE chapters SET title = ?, order_index = ? WHERE id = ?', [title, index, chapter.id]);
       });
+      rebuildLectureIndex(id);
     });
 
     const updated = db.get(`
-      SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.layout_mode, l.is_public, l.created_at,
+      SELECT l.id, l.title, l.slug, l.zip_name, l.category_id, l.cover_path, l.layout_mode, l.is_public, l.scan_report, l.created_at,
              c.name as category_name
       FROM lectures l
       LEFT JOIN categories c ON l.category_id = c.id
@@ -741,7 +764,7 @@ router.put('/:id/chapters', adminAuth, serializeMutation((req, res) => {
 router.get('/toc/:lectureSlug/:chapterSlug', optionalStudentAuth, (req, res) => {
   const { lectureSlug, chapterSlug } = req.params;
   const chapter = db.get(`
-    SELECT c.path, c.entry_file, l.id, l.category_id, l.is_public
+    SELECT c.path, c.entry_file, l.id, l.slug as lecture_slug, l.category_id, l.is_public
     FROM chapters c
     INNER JOIN lectures l ON l.id = c.lecture_id
     WHERE l.slug = ? AND c.slug = ?
@@ -755,9 +778,9 @@ router.get('/toc/:lectureSlug/:chapterSlug', optionalStudentAuth, (req, res) => 
     return res.status(403).json({ error: '无权限访问该讲义' });
   }
 
-  const htmlPath = path.join(lecturesRoot, chapter.path, chapter.entry_file || 'index.html');
+  const htmlPath = resolveContentFile(path.join(lecturesRoot, chapter.lecture_slug), path.relative(path.join(lecturesRoot, chapter.lecture_slug), path.join(lecturesRoot, chapter.path, chapter.entry_file || 'index.html')));
   
-  if (!fs.existsSync(htmlPath)) {
+  if (!htmlPath) {
     return res.status(404).json({ error: 'HTML file not found' });
   }
   

@@ -91,7 +91,7 @@ test('content session authenticates entry and its relative assets without exposi
   assert.ok(!memberCookie.includes(tokens.member));
   const html=await request('/lectures/private/index.html',{headers:{Cookie:memberCookie}});
   assert.equal(html.status,200); assert.match(html.data,/content-bridge\.js/);
-  assert.match(html.headers.get('content-security-policy'),/sandbox allow-scripts allow-same-site-none-cookies;/);
+  assert.match(html.headers.get('content-security-policy'),/sandbox allow-scripts allow-modals allow-same-site-none-cookies;/);
   assert.ok(!html.headers.get('content-security-policy').includes('allow-same-origin'));
   assert.equal((await request('/lectures/private/image.svg',{headers:{Cookie:memberCookie}})).status,200);
   assert.equal((await request('/api/knowledge/2/file',{headers:{Cookie:memberCookie}})).status,200);
@@ -154,9 +154,14 @@ test('knowledge creation defaults private and public flag can be explicitly chan
 test('progress is account-scoped, persistent and completion is independent of scroll position', async () => {
   const saved=await request('/api/progress/2/2',{method:'PUT',...json({position:100},'member')});
   assert.equal(saved.status,200); assert.equal(saved.data.completed,false); assert.equal(saved.data.lectureSlug,'private');
+  const atBottom=await request('/api/admin/stats/progress-overview',{headers:auth('admin')});
+  assert.equal(atBottom.status,200); assert.equal(atBottom.data.lectures[0].completed,0);
   await request('/api/progress/2/2',{method:'PUT',...json({position:80,completed:true},'member')});
   const updated=await request('/api/progress/2/2',{method:'PUT',...json({position:20},'member')});
   assert.equal(updated.data.completed,true); assert.equal(updated.data.position,20);
+  const marked=await request('/api/admin/stats/progress-overview',{headers:auth('admin')});
+  assert.equal(marked.data.lectures[0].completed,1);
+  for(const url of ['/api/admin/stats/stalled','/api/admin/stats/stuck-chapters']) assert.equal((await request(url,{headers:auth('admin')})).status,200);
   assert.equal((await request('/api/progress',{headers:auth('member')})).data.length,1);
   assert.deepEqual((await request('/api/progress',{headers:auth('outsider')})).data,[]);
   assert.equal(db.get('SELECT COUNT(*) AS count FROM student_progress').count,1);

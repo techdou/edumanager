@@ -128,6 +128,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import adminApi from '../../lib/adminApi'
+import { formatDateTime } from '../../utils/date'
 
 const categories = ref([])
 const loading = ref(false)
@@ -201,10 +202,7 @@ async function deleteCategory(category) {
   }
 }
 
-function formatDate(value) {
-  if (!value) return '-'
-  return new Date(String(value).replace(' ', 'T')).toLocaleString('zh-CN', { hour12: false })
-}
+const formatDate = formatDateTime
 </script>
 
 <style scoped>
@@ -284,8 +282,8 @@ function formatDate(value) {
 }
 
 .admin-input:focus {
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 3px #dbeafe;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-subtle);
   outline: none;
 }
 
@@ -301,7 +299,7 @@ function formatDate(value) {
   padding: 0 20px;
   border: none;
   border-radius: 8px;
-  background: #2563eb;
+  background: var(--color-primary);
   color: white;
   font: inherit;
   font-size: 14px;
@@ -311,7 +309,7 @@ function formatDate(value) {
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: #1d4ed8;
+  background: var(--color-primary-hover);
 }
 
 .btn-primary:active:not(:disabled) {
@@ -425,8 +423,8 @@ tbody tr:last-child td {
   height: 24px;
   padding: 0 8px;
   border-radius: 6px;
-  background: #eff6ff;
-  color: #2563eb;
+  background: var(--color-primary-subtle);
+  color: var(--color-primary);
   font-size: 13px;
   font-weight: 600;
 }

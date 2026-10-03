@@ -6,145 +6,163 @@
 
 上传、分类、分发课程资料，学生随时随地在线学习。
 
+![Node](https://img.shields.io/badge/Node.js-%E2%89%A522.12-339933?logo=node.js&logoColor=white)
+![Vue 3](https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white)
+![CI](https://github.com/techdou/edumanager/actions/workflows/ci.yml/badge.svg)
+
 </div>
+
+---
 
 ## 项目简介
 
-EduManager 面向教育机构，管理员上传 ZIP/HTML 讲义包并管理章节、分类和班级权限；学生在线阅读获授权的课程与知识库资料。
+EduManager 是一个面向教育机构的一站式讲义管理系统。管理员上传 ZIP/HTML 讲义包，系统自动解析章节目录并做内容安全消毒；学生通过「班级 × 分类」权限模型访问讲义，在线浏览、记录进度、撰写笔记，并支持全文检索与离线阅读。
 
-- **讲义管理**：上传预检、进度反馈、封面与分类，替换失败保留原内容，保留一份上一版本供回退。
-- **权限分级**：公开精选与班级×分类授权，讲义、附件、封面、目录及知识库均检查访问权限。
-- **在线学习**：章节与目录导航，按标题、分类、章节搜索，记录阅读位置、手动标记章节完成、查看最近学习。
-- **知识库**：飞书链接及 Markdown/PDF 预览，可分别设置公开状态。
-- **管理后台**：讲义、分类、用户、班级和数据统计管理。
-- **使用反馈**：模块加载失败可独立重试，登录后返回原页面，上传失败保留表单便于重试。
+## 功能特性
+
+- 📚 **讲义管理** — 上传 ZIP/HTML 自动解析章节、提取目录，支持封面、分类、公开展示、上一版本回退与上传失败保护；上传时自动清除脚本与不安全属性，并生成安全扫描报告
+- 🔎 **全文搜索** — 基于 SQLite FTS5 的讲义内容全文检索，结果按章节定位、关键词高亮，权限过滤与列表一致
+- 📖 **在线学习** — 章节导航、目录定位、按账号同步阅读位置与手动完成状态、最近学习记录及失败重试、导出 PDF
+- 📝 **章节笔记** — 学习过程中随手记录，按讲义/章节归档，仅本人可见可管理
+- 👥 **权限分级** — 公开精选 + 班级 × 分类混合权限模型，讲义与知识文档统一鉴权
+- 🗂️ **知识库** — 整合外部文档链接与上传的 Markdown/PDF，在线预览、导出
+- 📊 **学习看板** — 班级 × 讲义完成率矩阵、断点续学名单、卡点章节分析
+- 🛠️ **管理后台** — 讲义 / 分类 / 用户 / 班级 / 数据统计一体化管理
+- 📱 **PWA** — 公开讲义与应用外壳可离线回退，私有讲义不缓存
+- 🔒 **安全内建** — JWT 强密钥校验、路径穿越防护、iframe 沙箱、改密即失效旧 token、内容消毒管道
 
 ## 技术栈
 
 | 层 | 技术 |
-| --- | --- |
-| 前端 | Vue 3 · Vite · Vue Router · Axios · Markdown-it · Mermaid |
-| 后端 | Node.js · Express · better-sqlite3（SQLite + WAL） |
-| 认证 | JWT 登录凭证 · 短期 HttpOnly 内容会话 |
-| 文件 | Multer · AdmZip · 工作线程内 ZIP 校验与解压 |
+|---|---|
+| 前端 | Vue 3 · Vite · Vue Router · Axios · Markdown-it · Mermaid · KaTeX |
+| 后端 | Node.js ≥ 22.12 · Express · better-sqlite3（WAL + 事务 + FTS5） |
+| 认证 | JWT（管理员/学生双角色，改密失效） |
+| 文件 | Multer 上传 · 受限 ZIP 工作线程 · 替换失败补偿与版本回退 |
+| 质量 | Node/Vitest 回归测试 · 临时目录 API 冒烟测试 · GitHub Actions CI |
 
 ## 快速开始
 
 ### 环境要求
 
-- Node.js **≥ 22.9.0**，使用 npm 安装锁文件依赖。
-- ZIP 解压由应用处理，无需安装 `unzip` 或 `unar`。
-- 生产环境使用 HTTPS。私有讲义附属资源需要浏览器支持 Secure Cookie、SameSite=None 和讲义沙箱相关能力；本地使用 `localhost` 或 `127.0.0.1`。Safari 的 HTTP 本地地址不能依赖 Secure Cookie 例外行为，应使用本地 HTTPS。Safari/Firefox 还需在部署 HTTPS 环境验证，浏览器兼容性以实际使用环境为准。
+- **Node.js ≥ 22.12**（`npm run` 脚本依赖 `--env-file`）
+- ZIP 在受限工作线程中验证和解压，无需 `unar` 或 `unzip`。生产私有内容访问需要 HTTPS。
 
-### 安装与开发
+### 安装与本地开发
 
 ```bash
+# 1. 克隆仓库
 git clone https://github.com/techdou/edumanager.git
 cd edumanager
+
+# 2. 安装依赖
 npm ci
 npm --prefix client ci
 
+# 3. 配置环境变量
 cp .env.example .env
-# 编辑 .env，设置随机 JWT_SECRET
+# 编辑 .env，设置 JWT_SECRET（缺失或过短会拒绝启动）：
+# node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+
+# 4. 启动开发服务（后端 :3142 + 前端 :3001）
 npm run dev
 ```
 
-前端开发地址为 `http://localhost:3001`，后端默认 `:3142`。`server`、`server:prod`、`verify` 和 `backup` 命令通过 Node 的 `--env-file-if-exists` 可选加载项目根 `.env`；已有环境变量优先。直接运行 `node server/index.js` 不会自动读取 `.env`。
+前端开发地址：<http://localhost:3001>（Vite 代理转发 API 到后端）。
 
-本地开发缺少密钥时会警告并使用开发默认值；生产模式拒绝缺失、模板值或不足 32 字符的密钥。建议生成 48 字节随机密钥：
-
-```bash
-node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
-```
-
-### 构建与生产启动
+### 生产部署
 
 ```bash
+# 构建前端
 npm run build
+
+# 生产模式启动（显式启用 production，可选读取 .env）
+# 版本迁移、搜索索引初始化和完整备份完成后监听端口
 npm run server:prod
 ```
 
-后端托管 `client/dist/`。生产启动先执行版本迁移与数据库校验，再等待全量备份完成，最后监听端口；任一步失败会拒绝启动。反向代理应配置 HTTPS，并正确转发 `/api`、`/lectures` 和 `/content-bridge.js`。进程管理器必须使用单实例，环境变量加载方式须与上述命令保持一致。
+访问 <http://localhost:3142>。
 
-## 配置
+部署要点：
 
-见 [`.env.example`](.env.example)。相对路径按进程工作目录解析。
+1. `.env` 设置 `NODE_ENV=production` 与强随机 `JWT_SECRET`
+2. 用 PM2 / systemd 管理单实例进程，保持与 `npm run server:prod` 相同的环境加载方式；直接 `node server/index.js` 不会自动读取 `.env`。
+3. Nginx 反向代理到 `:3142` 并配置 HTTPS
+4. 完整备份需要停止服务，备份数据库、讲义、知识库、封面和版本元数据；部署受控停服备份流程及异地副本。
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `JWT_SECRET` | 开发专用默认值 | 生产必须设置强随机密钥 |
-| `NODE_ENV` | 非生产 | `production` 启用严格密钥校验及启动备份 |
-| `PORT` | `3142` | 后端端口 |
-| `CORS_ORIGIN` | 允许所有来源 | 逗号分隔的来源白名单，生产建议显式设置 |
-| `DATA_DIR` | 项目根 `data/` | 数据库、知识库、封面、版本元数据 |
-| `LECTURES_DIR` | 项目根 `lectures/` | 当前讲义与上一版本内容 |
-| `UPLOADS_DIR` | `<DATA_DIR>/uploads` | 上传临时文件 |
-| `BACKUP_DIR` | `<DATA_DIR>/backups` | 全量备份目录 |
-| `BACKUP_RETENTION` | `7` | 保留备份数量，必须为正整数 |
-| `LOG_LEVEL` | `info` | `error`、`warn`、`info` 或 `debug` |
+## 配置说明
 
-## 数据、升级与恢复
+所有配置通过环境变量读取（`.env`），完整模板见 [`.env.example`](.env.example)。
 
-数据库位于 `<DATA_DIR>/edumanager.db`，使用 WAL、事务及外键检查。`schema_migrations` 记录已应用的迁移版本，启动时事务执行缺失的迁移。新学习进度表具有外键约束；历史表的孤立关联通过审计报告，不静默删除。完整性或实际外键检查失败会阻止启动。
+| 变量 | 必填 | 说明 |
+|---|---|---|
+| `JWT_SECRET` | **是** | JWT 签名密钥，缺失或长度不足 32 会**拒绝启动** |
+| `NODE_ENV` | 否 | `production` 启用启动备份等生产行为 |
+| `PORT` | 否 | 后端端口，默认 `3142` |
+| `CORS_ORIGIN` | 否 | CORS 白名单（逗号分隔），不设则允许所有来源，生产建议显式设置 |
+| `DATA_DIR` | 否 | 数据目录，默认项目根 `data/` |
+| `LECTURES_DIR` | 否 | 讲义文件目录，默认项目根 `lectures/` |
+| `LOG_LEVEL` | 否 | 日志级别 `error/warn/info/debug`，默认 `info` |
 
-升级前先停止旧服务并保留代码及完整的数据、讲义目录副本。启动备份发生在迁移之后，不能替代升级前恢复点。现有知识库中 `is_public=0` 的资料在升级后按私有权限展示，管理员需显式开启“公开展示”才能向匿名用户开放。
+## 项目结构
 
-阅读位置与完成状态按账号保存在服务器，浏览器保留有限缓存用于加载失败时恢复显示。滚动到底不会自动标记完成。替换讲义或回退版本会重建章节，原章节的学习进度随之重置；回退保留当前讲义的分类、公开状态及访问地址。
+```
+edumanager/
+├── server/                  # 后端（Express + better-sqlite3）
+│   ├── index.js             # 入口：路由挂载、HTML 进度脚本注入、错误兜底、优雅关闭
+│   ├── db.js                # 数据层（WAL、事务、自动迁移）
+│   ├── config.js            # 集中配置 + JWT_SECRET 强校验
+│   ├── logger.js            # 结构化 JSON 日志
+│   ├── routes/              # auth / lecture / category / admin / knowledge / search / progress / notes
+│   ├── middleware/          # adminAuth / studentAuth
+│   └── utils/               # permissions / 原子写入 / TOC 提取 / FTS5 搜索 / 内容消毒
+├── client/                  # 前端（Vue 3 + Vite）
+│   ├── src/views/           # 学生端 + 管理后台页面
+│   ├── src/components/      # 通用组件
+│   ├── src/lib/             # http / adminApi / jwt 封装
+│   ├── src/utils/           # 日期 / 导出 / 讲义 URL 等工具
+│   └── public/              # 静态资源 + PWA（manifest / Service Worker）
+├── scripts/                 # 运维与测试脚本（冒烟 / 事务 / 备份 / 迁移核对）
+├── .github/workflows/       # CI（后端回归 + 语法检查 + 前端测试 + 构建）
+├── .env.example             # 环境变量模板
+└── package.json
+```
 
-### 离线全量备份
+> `data/`、`lectures/`、`uploads/` 为运行时目录，由程序生成，不入库。
 
-**先停止服务，再执行备份。** 数据目录锁只允许一个服务或维护写进程，在线服务运行时备份命令会拒绝执行。
+## 测试与脚本
 
 ```bash
+npm test                        # 后端与学习逻辑回归，使用临时数据库及目录
+npm run test:smoke              # 真实 HTTP/API 冒烟，隔离端口和目录
+npm run test:tx                 # 临时数据库事务回滚
+npm run check                  # 语法检查
+npm --prefix client test       # 前端 Vitest 单元测试
+npm run build                  # 前端生产构建
+npm run verify                 # 实际配置数据库的只读完整性及历史孤立关联审计
+
+# 先停止服务，再备份（服务运行时数据锁拒绝备份）
 npm run backup
-# 输出生成的备份目录，例如 /srv/edumanager/data/backups/实际备份目录
-npm run verify:backup -- /srv/edumanager/data/backups/实际备份目录
+npm run verify:backup -- /path/to/backup
+# 恢复目标必须不存在或为空，不覆盖当前实例
+npm run restore -- /path/to/backup /path/to/new-empty-instance
 ```
 
-备份包含数据库、当前及历史讲义、知识库、封面和讲义版本元数据，以及文件大小和 SHA-256 校验清单。备份先写暂存目录，验证后发布，并按 `BACKUP_RETENTION` 保留最近备份。临时上传文件不作为业务资料备份。
+恢复目录包含 `data/` 与 `lectures/`，核验后通过 `DATA_DIR`、`LECTURES_DIR` 指向恢复位置。备份默认保留 7 份，可设置 `BACKUP_DIR`、`BACKUP_RETENTION`；上传临时目录可设置 `UPLOADS_DIR`。升级前保留旧实例完整副本，启动备份在迁移后生成，不能替代升级前恢复点。
 
-```bash
-npm run restore -- /srv/edumanager/data/backups/实际备份目录 /srv/edumanager-restored
-```
+数据库版本化迁移保留已有数据，旧学习记录在章节匹配时迁入新的账号进度表，无法匹配的旧记录保留。知识库默认私有；管理员需显式开启公开展示。替换/回退讲义重建章节并重置相关学习进度。
 
-恢复目标必须是**不存在或全新的空目录**，不能覆盖现有实例。脚本验证文件清单、哈希与数据库完整性后，恢复到 `<目标>/data` 和 `<目标>/lectures`。检查恢复结果后，设置 `DATA_DIR` 与 `LECTURES_DIR` 指向新目录再启动；确认原有 `BACKUP_DIR`、`UPLOADS_DIR` 配置是否仍适用。恢复命令只恢复文件，不自动切换服务。
+GitHub Actions 在 `main` 推送和面向 `main` 的 PR 上执行测试及构建。仓库当前没有生产自动部署工作流，CI 成功不代表已部署到服务器。
 
-### 验证命令
+## 安全说明
 
-```bash
-npm test             # 上传、权限、进度、迁移、备份与前端逻辑回归
-npm run test:smoke   # 隔离目录中的 API 冒烟验证
-npm run test:tx      # 临时数据库中的事务回滚验证
-npm run check        # 服务端、脚本与测试语法检查
-npm run build        # 前端生产构建
-npm run verify       # 当前配置数据库的只读完整性与历史孤立关联审计
-```
+- JWT 密钥缺失拒绝启动，无任何兜底值；修改密码后旧 token 立即失效
+- 上传文件名白名单校验 + ZIP 解压路径穿越（ZIP slip）防护
+- 讲义 HTML 默认消毒（剥离脚本 / 内联事件 / 危险协议链接），iframe 沙箱不允许 `allow-same-origin`；目录与进度经限定来源的消息通信，打印使用消息桥接
+- 内容通过短期 HttpOnly/Secure 只读 Cookie 访问，写入仍需 Authorization。私有文件、封面、笔记和搜索结果均检查当前权限；浏览器兼容性需在部署 HTTPS 环境验证。
+- 普通上传异常有补偿回滚；断电或 SIGKILL 时文件系统与 SQLite 的联合原子性仍需恢复日志及备份保障。
+- 讲义内容安全扫描报告随上传结果展示，供管理员决策
 
-测试使用临时数据库和目录，不读取真实 `.env`。`verify` 是针对实际配置数据库的审计，发现异常返回非零退出码。`GET /health` 检查数据库可查询性，正常返回 200，查库失败返回 503；它不代表所有学习功能均正常。
+## 许可
 
-## 安全与运行边界
-
-- 上传前限制包大小、解压后体积、条目数、目录深度、压缩比和处理时间，拒绝路径穿越、符号链接及重复路径。默认上限为上传 200 MiB、单文件 64 MiB、解压总量 512 MiB、5000 个条目、32 层目录、60 秒处理时间。
-- 上传先校验、暂存，再切换文件与提交数据库；普通异常有补偿回滚。文件系统和 SQLite 不是同一事务，不能保证 SIGKILL、断电等中断场景下的联合原子性，应结合已验证备份恢复。
-- 讲义 iframe 与内容 CSP 允许脚本及 `allow-same-site-none-cookies`，不授予 `allow-same-origin`；上传脚本不能读取应用的同源存储。目录定位、阅读位置通过限定消息来源的 `postMessage` 通信。
-- 内容会话有效期最多 30 分钟且不超过登录有效期，Cookie 为 HttpOnly、Secure；讲义路径使用 SameSite=None，知识库及封面 API 路径使用 SameSite=Strict。内容凭证只接受 GET/HEAD，业务写入仍需 Authorization，不接受 URL 查询参数中的 token。
-- 当前面向单进程、本地磁盘部署。异地备份、自动停服备份流程、容量告警及多实例部署需结合生产环境补充，详见 [ROADMAP.md](ROADMAP.md)。
-
-## 目录与文档
-
-```text
-server/       Express 路由、认证、数据库、上传与备份工具
-client/       Vue 页面与组件、学习进度及内容会话逻辑
-scripts/      备份、验证、恢复及隔离测试入口
-test/         Node 回归测试
-data/         运行时数据库及资料（自动创建，不纳入 Git）
-lectures/     讲义及历史内容（自动创建，不纳入 Git）
-```
-
-- [UPGRADE_PLAN.md](UPGRADE_PLAN.md)：本次升级范围、分工及验收记录。
-- [DESIGN.md](DESIGN.md)：权限、内容会话及学习进度设计。
-- [ROADMAP.md](ROADMAP.md)：已实现能力及后续升级条件。
-
-## License
-
-MIT
+[Apache-2.0](LICENSE) © TechDou

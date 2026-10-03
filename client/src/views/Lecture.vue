@@ -10,6 +10,18 @@
         </router-link>
         <h1 class="lecture-title">{{ lecture?.title || '讲义浏览' }}</h1>
         <button v-if="currentPath && !iframeError" class="completion-button" :disabled="savingCompletion" @click="markComplete">{{ completed ? '已完成 · 取消标记' : '标记本章已完成' }}</button>
+        <button
+          v-if="currentSrc && !nativeLayout"
+          type="button"
+          class="export-pdf-btn"
+          :disabled="exporting"
+          @click="onExportPdf"
+        >{{ exporting ? '生成中…' : '导出 PDF' }}</button>
+        <button
+          type="button"
+          class="export-pdf-btn notes-toggle-btn"
+          @click="toggleNotes"
+        >笔记</button>
         <div v-if="currentPath && !nativeLayout" class="read-progress">
           <span>阅读位置 {{ readProgress }}%</span>
           <div><i :style="{ width: `${readProgress}%` }"></i></div>
@@ -131,7 +143,7 @@
           <button class="completion-button" @click="loadLecture">重新加载讲义</button>
           <router-link v-if="!getToken()" :to="loginLocation()">登录后重试</router-link>
         </div>
-        <iframe v-else-if="currentSrc" :key="frameKey" ref="viewerFrame" :src="currentSrc" class="viewer-frame" title="讲义内容" sandbox="allow-scripts allow-same-site-none-cookies" @load="onIframeLoad" @error="iframeError = true" />
+        <iframe v-else-if="currentSrc" :key="frameKey" ref="viewerFrame" :src="currentSrc" class="viewer-frame" title="讲义内容" sandbox="allow-scripts allow-modals allow-same-site-none-cookies" @load="onIframeLoad" @error="iframeError = true" />
         <div v-else class="empty-state">
           <div class="empty-state-icon" aria-hidden="true">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
@@ -144,6 +156,45 @@
         </div>
       </main>
     </div>
+
+    <!-- 章节笔记抽屉 -->
+    <Teleport to="body">
+      <Transition name="notes-drawer">
+        <aside v-if="notesPanelOpen" class="notes-panel" aria-label="我的笔记">
+          <div class="notes-header">
+            <h3>我的笔记</h3>
+            <button class="notes-close" aria-label="关闭笔记" @click="notesPanelOpen = false">✕</button>
+          </div>
+          <div class="notes-body">
+            <div class="note-composer">
+              <textarea
+                v-model="newNote"
+                :placeholder="`记录笔记（${currentChapterMeta()?.title || '当前章节'}）…`"
+                rows="3"
+                maxlength="5000"
+              ></textarea>
+              <button
+                type="button"
+                class="note-save-btn"
+                :disabled="noteSaving || !newNote.trim()"
+                @click="addNote"
+              >{{ noteSaving ? '保存中…' : '添加笔记' }}</button>
+            </div>
+            <div v-if="notesLoading" class="notes-empty">加载中…</div>
+            <div v-else-if="notesError" role="alert" class="notes-empty">{{ notesError }} <button @click="loadNotes">重试</button></div>
+            <div v-else-if="notes.length === 0" class="notes-empty">还没有笔记，写下第一条吧</div>
+            <div v-for="note in notes" :key="note.id" class="note-item">
+              <div class="note-meta">
+                <span class="note-chapter">{{ chapterTitleOf(note.chapter_slug) }}</span>
+                <button type="button" class="note-del-btn" @click="removeNote(note.id)">删除</button>
+              </div>
+              <p class="note-content">{{ note.content }}</p>
+              <small class="note-time">{{ formatNoteTime(note.updated_at) }}</small>
+            </div>
+          </div>
+        </aside>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -154,6 +205,10 @@ import api from '../lib/http'
 import { ensureContentSession } from '../lib/contentSession'
 import { getToken, authHeaders, loginLocation } from '../lib/auth'
 import { cachedProgress, loadProgress, cacheProgress, saveProgress } from '../lib/progress'
+import { showToast } from '../lib/http'
+import { buildChapterSrc } from '../utils/lectureUrl'
+import { formatDateTime } from '../utils/date'
+import { printIframe } from '../utils/exporter.js'
 const route = useRoute()
 const slug = computed(() => route.params.slug)
 const currentChapter = computed(() => route.params.chapter || chapters.value[0]?.slug || '')
@@ -163,6 +218,20 @@ const loading = ref(true)
 const viewerFrame = ref(null)
 const iframeError = ref(false)
 const loadError = ref('')
+const exporting = ref(false)
+
+async function onExportPdf() {
+  if (exporting.value || !viewerFrame.value) return
+  exporting.value = true
+  try {
+    await printIframe(viewerFrame.value)
+  } catch (e) {
+    showToast(e.message || '导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
+
 const lecture = ref(null)
 const chapters = ref([])
 const toc = ref(null)
@@ -177,7 +246,7 @@ const showToc = computed(() => !!toc.value?.modules?.length)
 const nativeLayout = computed(() => lecture.value?.layout_mode === 'native')
 const chapter = computed(() => chapters.value.find(item => item.slug === currentChapter.value))
 const currentPath = computed(() => chapter.value?.path || '')
-const currentSrc = computed(() => ready.value && chapter.value ? `/lectures/${chapter.value.path}/${chapter.value.entry_file || 'index.html'}` : '')
+const currentSrc = computed(() => ready.value && chapter.value ? buildChapterSrc(lecture.value, chapter.value) : '')
 let requestVersion = 0
 let controller = null
 let saveTimer = null
@@ -248,7 +317,76 @@ function onIframeLoad() { restoreFrame() }
 function scrollToAnchor(anchor) { postToFrame({ type: 'scroll-to-anchor', anchor }); if (isMobile.value) sidebarCollapsed.value = true }
 function isModuleActive(module) { return activeAnchor.value === module.anchor || module.sections?.some(section => section.anchor === activeAnchor.value) }
 
+// ===== 章节笔记 =====
+const notesPanelOpen = ref(false)
+const notes = ref([])
+const notesLoading = ref(false)
+const newNote = ref('')
+const noteSaving = ref(false)
+const notesError = ref('')
+let notesSeq = 0
+function currentChapterMeta() { return chapter.value }
+
+function toggleNotes() {
+  notesPanelOpen.value = !notesPanelOpen.value
+  if (notesPanelOpen.value) loadNotes()
+}
+
+async function loadNotes() {
+  if (!lecture.value) return
+  const seq = ++notesSeq
+  const requestedSlug = slug.value
+  notesLoading.value = true; notesError.value = ''
+  try {
+    const res = await api.get('/api/notes', { params: { lectureSlug: requestedSlug } })
+    if (seq === notesSeq && requestedSlug === slug.value) notes.value = res.data
+  } catch {
+    if (seq === notesSeq) notesError.value = '笔记加载失败，请重试。'
+  } finally {
+    if (seq === notesSeq) notesLoading.value = false
+  }
+}
+
+async function addNote() {
+  const content = newNote.value.trim()
+  if (!content || !currentChapter.value) return
+  noteSaving.value = true
+  try {
+    await api.post('/api/notes', {
+      lectureSlug: slug.value,
+      chapterSlug: currentChapter.value,
+      content,
+      anchor: activeAnchor.value || null
+    })
+    newNote.value = ''
+    await loadNotes()
+  } catch (e) {
+    showToast(e.response?.data?.error || '笔记保存失败')
+  } finally {
+    noteSaving.value = false
+  }
+}
+
+async function removeNote(id) {
+  try {
+    await api.delete(`/api/notes/${id}`)
+    notes.value = notes.value.filter(note => note.id !== id)
+  } catch {
+    showToast('删除失败')
+  }
+}
+
+function chapterTitleOf(chapterSlug) {
+  return chapters.value.find(item => item.slug === chapterSlug)?.title || chapterSlug
+}
+
+function formatNoteTime(value) {
+  return formatDateTime(value)
+}
+
+
 async function loadLecture() {
+  notesSeq += 1; notes.value = []; notesError.value = ''
   flushProgress()
   controller?.abort()
   controller = new AbortController()
@@ -260,9 +398,9 @@ async function loadLecture() {
   activeAnchor.value = ''; readProgress.value = 0; completed.value = false; savingCompletion.value = false
   clearTimeout(frameTimer)
   try {
-    const { data } = await api.get('/api/lectures', { signal })
+    const { data } = await api.get(`/api/lectures/detail/${encodeURIComponent(requestedSlug)}`, { signal })
     if (version !== requestVersion) return
-    lecture.value = (Array.isArray(data) ? data : []).find(item => item.slug === requestedSlug) || null
+    lecture.value = data?.slug === requestedSlug ? data : null
     chapters.value = lecture.value?.chapters || []
     if (!lecture.value || !chapters.value.length || (requestedChapter && !chapters.value.some(item => item.slug === requestedChapter))) throw new Error('讲义或章节不存在，或当前账号没有访问权限。')
     let rows
@@ -274,10 +412,11 @@ async function loadLecture() {
     completed.value = Boolean(saved?.completed)
     await ensureContentSession()
     if (version !== requestVersion) return
-    const entryUrl = `/lectures/${chapter.value.path}/${chapter.value.entry_file || 'index.html'}`
+    const entryUrl = buildChapterSrc(lecture.value, chapter.value)
     await api.head(entryUrl, { signal, silent: true })
     if (version !== requestVersion) return
     ready.value = true; frameKey.value += 1
+    if (notesPanelOpen.value) loadNotes()
     frameTimer = setTimeout(() => { if (version === requestVersion) { iframeError.value = true; loadError.value = '讲义加载超时，请重新打开。' } }, 30000)
     if (!nativeLayout.value) {
       api.get(`/api/lectures/toc/${encodeURIComponent(requestedSlug)}/${encodeURIComponent(chapter.value.slug)}`, { signal, silent: true }).then(({ data }) => {
@@ -305,7 +444,7 @@ onMounted(() => {
   loadLecture()
 })
 onUnmounted(() => {
-  flushProgress(); requestVersion += 1; controller?.abort(); clearInterval(sessionTimer); clearTimeout(frameTimer)
+  flushProgress(); requestVersion += 1; notesSeq += 1; controller?.abort(); clearInterval(sessionTimer); clearTimeout(frameTimer)
   window.removeEventListener('resize', syncViewportMode); window.removeEventListener('message', handleTocMessage); window.removeEventListener('pagehide', saveBeforeLeaving)
 })
 watch(() => [route.params.slug, route.params.chapter], loadLecture)
@@ -378,7 +517,6 @@ watch(() => [route.params.slug, route.params.chapter], loadLecture)
 }
 
 .read-progress {
-  margin-left: auto;
   min-width: 140px;
   display: grid;
   gap: 5px;
@@ -386,6 +524,212 @@ watch(() => [route.params.slug, route.params.chapter], loadLecture)
   font-size: var(--text-xs);
   font-weight: 700;
   text-align: right;
+}
+
+/* 导出 PDF 按钮：放在 read-progress 左侧，作为右对齐簇的第一项 */
+.export-pdf-btn {
+  margin-left: auto;
+  margin-right: 12px;
+  padding: 7px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-ink-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.export-pdf-btn:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.export-pdf-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* 笔记按钮：export 按钮渲染时紧随其后，隐藏(native 布局)时自己右对齐 */
+.notes-toggle-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.export-pdf-btn + .notes-toggle-btn {
+  margin-left: 0;
+}
+
+/* ===== 章节笔记抽屉 ===== */
+.notes-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(380px, 92vw);
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border-left: 1px solid var(--color-border);
+  box-shadow: -12px 0 40px rgba(0, 0, 0, 0.12);
+}
+
+.notes-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.notes-header h3 {
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.notes-close {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  color: var(--color-ink-secondary);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.notes-close:hover {
+  background: var(--color-border);
+}
+
+.notes-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.note-composer {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.note-composer textarea {
+  width: 100%;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.note-composer textarea:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+.note-save-btn {
+  justify-self: end;
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--color-primary);
+  color: white;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.note-save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.notes-empty {
+  padding: var(--space-8) 0;
+  text-align: center;
+  color: var(--color-ink-tertiary);
+  font-size: var(--text-sm);
+}
+
+.note-item {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.note-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.note-chapter {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--color-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-del-btn {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-ink-tertiary);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.note-del-btn:hover {
+  color: var(--color-error);
+  background: var(--color-error-subtle);
+}
+
+.note-content {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.note-time {
+  color: var(--color-ink-tertiary);
+  font-size: var(--text-xs);
+}
+
+.notes-drawer-enter-active,
+.notes-drawer-leave-active {
+  transition: transform 0.25s var(--ease-out-expo), opacity 0.25s ease;
+}
+
+.notes-drawer-enter-from,
+.notes-drawer-leave-to {
+  transform: translateX(24px);
+  opacity: 0;
 }
 
 .read-progress div {

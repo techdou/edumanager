@@ -23,7 +23,7 @@ function issueContentSession(req, res) {
   // A content credential can only read files, never authenticate a write API.
   const remaining = Math.min(1800, req.student.exp - Math.floor(Date.now() / 1000));
   if (remaining <= 0) return res.status(401).json({ error: '登录已失效，请重新登录' });
-  const token = jwt.sign({ id: req.student.id, username: req.student.username, scope: 'content' }, config.jwtSecret, { expiresIn: remaining });
+  const token = jwt.sign({ id: req.student.id, username: req.student.username, scope: 'content', login_iat: req.student.iat }, config.jwtSecret, { expiresIn: remaining });
   for (const path of COOKIE_PATHS) res.cookie(COOKIE_NAME, token, { ...cookieOptions(path), maxAge: remaining * 1000 });
   res.setHeader('Cache-Control', 'no-store');
   res.json({ expiresAt: Date.now() + remaining * 1000 });

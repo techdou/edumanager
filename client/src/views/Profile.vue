@@ -114,6 +114,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from '../lib/http'
 import { logoutSession } from '../lib/contentSession'
+import { formatDateTime } from '../utils/date'
 
 const router = useRouter()
 const profile = ref(null)
@@ -127,10 +128,7 @@ const editForm = ref({ real_name: '', email: '' })
 
 async function logout() { try { await logoutSession() } finally { router.push('/') } }
 
-function formatDate(value) {
-  if (!value) return '-'
-  return new Date(String(value).replace(' ', 'T')).toLocaleString('zh-CN', { hour12: false })
-}
+const formatDate = formatDateTime
 
 function startEdit() {
   editForm.value = {
@@ -150,12 +148,9 @@ async function saveProfile() {
   saving.value = true
   message.value = ''
   try {
-    const token = localStorage.getItem('token')
     const res = await axios.put('/api/auth/student/profile', {
       real_name: editForm.value.real_name.trim() || null,
       email: editForm.value.email.trim() || null
-    }, {
-      headers: { Authorization: `Bearer ${token}` }
     })
     profile.value = res.data
     editing.value = false

@@ -20,20 +20,20 @@ test('lecture upload, replacement and previous-version HTTP regressions', async 
   const database = new Database(':memory:');
   database.exec(`
     CREATE TABLE admins(id INTEGER PRIMARY KEY, username TEXT);
-    CREATE TABLE students(id INTEGER PRIMARY KEY, username TEXT, status TEXT);
+    CREATE TABLE students(id INTEGER PRIMARY KEY, username TEXT, status TEXT, pwd_updated_at TEXT);
     CREATE TABLE categories(id INTEGER PRIMARY KEY, name TEXT);
     CREATE TABLE lectures(id INTEGER PRIMARY KEY, title TEXT, slug TEXT UNIQUE, zip_name TEXT,
-      category_id INTEGER, cover_path TEXT, layout_mode TEXT, is_public INTEGER, created_at TEXT);
+      category_id INTEGER, cover_path TEXT, layout_mode TEXT, is_public INTEGER, created_at TEXT, scan_report TEXT);
     CREATE TABLE chapters(id INTEGER PRIMARY KEY, lecture_id INTEGER, title TEXT, slug TEXT,
       path TEXT, entry_file TEXT, order_index INTEGER);
     INSERT INTO admins VALUES(1, 'admin');
-    INSERT INTO students VALUES(1, 'admin', 'active');
+    INSERT INTO students(id, username, status) VALUES(1, 'admin', 'active');
     INSERT INTO categories VALUES(1, 'Test');
   `);
   let failWrite = null;
   const db = {
     get: (sql, values = []) => database.prepare(sql).get(...values) || null,
-    query: (sql, values = []) => database.prepare(sql).all(...values),
+    query: (sql, values = []) => { const statement = database.prepare(sql); return statement.reader ? statement.all(...values) : statement.run(...values); },
     run: (sql, values = []) => {
       if (failWrite?.test(sql)) throw new Error('injected database failure');
       return database.prepare(sql).run(...values);

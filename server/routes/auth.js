@@ -10,6 +10,12 @@ const { getStudentGroups, getAccessibleCategories } = require('../utils/permissi
 const { issueContentSession, clearContentSession } = require('../utils/contentSession');
 
 const JWT_SECRET = config.jwtSecret;
+const asyncRoute = handler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+function validCredentials(username, password) {
+  return typeof username === 'string' && username.trim().length > 0 && username.length <= 100
+    && typeof password === 'string' && password.length > 0 && Buffer.byteLength(password, 'utf8') <= 72;
+}
+
 
 function logUserActivity(user, activityType, role, details = null) {
   if (!user) return;
@@ -23,9 +29,9 @@ function logUserActivity(user, activityType, role, details = null) {
 router.post('/content-session', studentAuth, issueContentSession);
 router.post('/logout', clearContentSession);
 
-router.post('/admin/login', (req, res) => {
+router.post('/admin/login', asyncRoute(async (req, res) => {
   const { username, password } = req.body;
-  if (typeof username !== 'string' || typeof password !== 'string' || !username || !password) {
+  if (!validCredentials(username, password)) {
     return res.status(400).json({ error: '用户名和密码必填' });
   }
   
@@ -35,7 +41,7 @@ router.post('/admin/login', (req, res) => {
     return res.status(401).json({ error: '用户名或密码错误' });
   }
   
-  const valid = bcrypt.compareSync(password, admin.password_hash);
+  const valid = await bcrypt.compare(password, admin.password_hash);
   if (!valid) {
     return res.status(401).json({ error: '用户名或密码错误' });
   }
@@ -63,17 +69,17 @@ router.post('/admin/login', (req, res) => {
   const token = jwt.sign({ id: user.id, username: admin.username, role: 'admin' }, JWT_SECRET, { expiresIn: '7d' });
   
   res.json({ token, username: admin.username, role: 'admin' });
-});
+}));
 
 // 学生注册（如果无管理员，自动成为管理员）
-router.post('/student/register', (req, res) => {
+router.post('/student/register', asyncRoute(async (req, res) => {
   const { username, password, email, real_name } = req.body;
 
-  if (!username || !password) {
+  if (!validCredentials(username, password)) {
     return res.status(400).json({ error: '用户名和密码必填' });
   }
 
-  if (!real_name) {
+  if (typeof real_name !== 'string' || !real_name.trim() || real_name.length > 100 || (email !== undefined && (typeof email !== 'string' || email.length > 254))) {
     return res.status(400).json({ error: '真实姓名必填' });
   }
 
@@ -82,7 +88,7 @@ router.post('/student/register', (req, res) => {
     return res.status(400).json({ error: '用户名已存在' });
   }
 
-  const passwordHash = bcrypt.hashSync(password, 10);
+  const passwordHash = await bcrypt.hash(password, 10);
   // 事务：students 写入与（可能的）admins 写入必须原子
   const result = db.transaction(() => {
     const r = db.run('INSERT INTO students (username, password_hash, email, real_name) VALUES (?, ?, ?, ?)', [username, passwordHash, email || null, real_name]);
@@ -107,12 +113,12 @@ router.post('/student/register', (req, res) => {
   logUserActivity(student, 'register', 'student');
   const token = jwt.sign({ id: studentId, username, role: 'student' }, JWT_SECRET, { expiresIn: '7d' });
   res.json({ token, username, role: 'student', real_name });
-});
+}));
 
 // 学生登录
-router.post('/student/login', (req, res) => {
+router.post('/student/login', asyncRoute(async (req, res) => {
   const { username, password } = req.body;
-  if (typeof username !== 'string' || typeof password !== 'string' || !username || !password) {
+  if (!validCredentials(username, password)) {
     return res.status(400).json({ error: '用户名和密码必填' });
   }
   
@@ -126,7 +132,7 @@ router.post('/student/login', (req, res) => {
     return res.status(403).json({ error: '账号已被禁用，请联系管理员' });
   }
   
-  const valid = bcrypt.compareSync(password, student.password_hash);
+  const valid = await bcrypt.compare(password, student.password_hash);
   if (!valid) {
     return res.status(401).json({ error: '用户名或密码错误' });
   }
@@ -140,13 +146,13 @@ router.post('/student/login', (req, res) => {
   
   const token = jwt.sign({ id: student.id, username: student.username, role }, JWT_SECRET, { expiresIn: '7d' });
   res.json({ token, username: student.username, role });
-});
+}));
 
 // 管理员注册（仅第一个）
-router.post('/admin/register', (req, res) => {
+router.post('/admin/register', asyncRoute(async (req, res) => {
   const { username, password } = req.body;
   
-  if (!username || !password) {
+  if (!validCredentials(username, password)) {
     return res.status(400).json({ error: '用户名和密码必填' });
   }
   
@@ -155,7 +161,7 @@ router.post('/admin/register', (req, res) => {
     return res.status(403).json({ error: '管理员账号已存在，无法重复注册' });
   }
   
-  const passwordHash = bcrypt.hashSync(password, 10);
+  const passwordHash = await bcrypt.hash(password, 10);
   const existingStudent = db.get('SELECT id FROM students WHERE username = ?', [username]);
   if (existingStudent) {
     return res.status(400).json({ error: '用户名已存在' });
@@ -163,18 +169,21 @@ router.post('/admin/register', (req, res) => {
 
   // 事务：admins 与 students 双写必须原子
   const result = db.transaction(() => {
+    // Hashing yields: recheck bootstrap eligibility inside the write transaction.
+    if (db.get('SELECT id FROM admins LIMIT 1')) return null;
     db.run('INSERT INTO admins (username, password_hash) VALUES (?, ?)', [username, passwordHash]);
     return db.run(`
       INSERT INTO students (username, password_hash, status)
       VALUES (?, ?, 'active')
     `, [username, passwordHash]);
   });
+  if (!result) return res.status(403).json({ error: '管理员账号已存在，无法重复注册' });
   const adminUser = db.get('SELECT * FROM students WHERE id = ?', [result.lastInsertRowid]);
   logUserActivity(adminUser, 'register', 'admin');
 
   const token = jwt.sign({ id: result.lastInsertRowid, username, role: 'admin' }, JWT_SECRET, { expiresIn: '7d' });
   res.json({ token, username, role: 'admin' });
-});
+}));
 
 // 学生个人资料
 router.get('/student/profile', studentAuth, (req, res) => {

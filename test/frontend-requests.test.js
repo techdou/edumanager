@@ -37,13 +37,14 @@ test('late lecture response cannot replace the current chapter; only the current
   const requests = [];
   const route = { params: { slug: 'a' } };
   const api = { get: url => {
-    if (url === '/api/lectures') { const item = deferred(); requests.push(item); return item.promise; }
+    if (url.startsWith('/api/lectures/detail/')) { const item = deferred(); requests.push(item); return item.promise; }
     return Promise.resolve({ data: {} });
   }, head: async () => ({}) };
   const noop = () => {};
   const values = {
     ref: value => ({ value }), computed: fn => ({ get value() { return fn(); } }),
     onMounted: noop, onUnmounted: noop, watch: noop, useRoute: () => route, api,
+    buildChapterSrc: (lecture, chapter) => `/lectures/${chapter.path}/${chapter.entry_file || 'index.html'}`,
     ensureContentSession: async () => {}, getToken: () => '', authHeaders: () => ({}), loginLocation: () => '/login',
     cachedProgress: () => [], loadProgress: async () => [], cacheProgress: noop, saveProgress: async () => {},
     window: { innerWidth: 1024 }, AbortController, setTimeout: () => 0, clearTimeout: noop, clearInterval: noop
@@ -52,9 +53,9 @@ test('late lecture response cannot replace the current chapter; only the current
   const state = expose(...Object.values(values));
   const a = state.loadLecture();
   route.params.slug = 'b'; const b = state.loadLecture();
-  requests[1].resolve({ data: [{ id: 2, slug: 'b', chapters: [{ id: 22, slug: 'b', path: 'b', entry_file: 'index.html' }] }] });
+  requests[1].resolve({ data: { id: 2, slug: 'b', chapters: [{ id: 22, slug: 'b', path: 'b', entry_file: 'index.html' }] } });
   await b;
-  requests[0].resolve({ data: [{ id: 1, slug: 'a', chapters: [{ id: 11, slug: 'a', path: 'a' }] }] });
+  requests[0].resolve({ data: { id: 1, slug: 'a', chapters: [{ id: 11, slug: 'a', path: 'a' }] } });
   await a;
   assert.equal(state.lecture.value.slug, 'b');
   assert.equal(state.loading.value, false);

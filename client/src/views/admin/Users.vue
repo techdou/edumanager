@@ -144,6 +144,7 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import adminApi from '../../lib/adminApi'
+import { formatDateTime } from '../../utils/date'
 
 const users = ref([])
 const total = ref(0)
@@ -302,10 +303,7 @@ function statusText(status) {
   return status === 'disabled' ? '禁用' : '启用'
 }
 
-function formatDate(value) {
-  if (!value) return '-'
-  return new Date(String(value).replace(' ', 'T')).toLocaleString('zh-CN', { hour12: false })
-}
+const formatDate = formatDateTime
 </script>
 
 <style scoped>

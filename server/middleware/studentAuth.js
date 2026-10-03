@@ -15,10 +15,12 @@ function authenticate(req, allowContentCookie = false) {
   if ((cookie && decoded.scope !== 'content') || (!cookie && decoded.scope)) return null;
   if (!Number.isInteger(decoded.id) || typeof decoded.username !== 'string') return null;
   // Database failures are server failures, not expired sessions.
-  const user = db.get('SELECT id, username, status FROM students WHERE id = ? AND username = ?', [decoded.id, decoded.username]);
+  const user = db.get('SELECT * FROM students WHERE id = ? AND username = ?', [decoded.id, decoded.username]);
   if (!user || user.status !== 'active') return null;
+  const loginIat = cookie ? decoded.login_iat ?? decoded.iat : decoded.iat;
+  if (user.pwd_updated_at && (!Number.isFinite(loginIat) || loginIat < user.pwd_updated_at)) return null;
   const admin = db.get('SELECT id FROM admins WHERE username = ?', [user.username]);
-  return { id: user.id, username: user.username, role: admin ? 'admin' : 'student', exp: decoded.exp };
+  return { id: user.id, username: user.username, role: admin ? 'admin' : 'student', exp: decoded.exp, iat: loginIat };
 }
 
 function studentAuth(req, res, next) {
